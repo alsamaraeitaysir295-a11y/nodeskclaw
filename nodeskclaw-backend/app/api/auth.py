@@ -18,6 +18,7 @@ from app.schemas.auth import (
     ChangePasswordRequest,
     EmailLoginRequest,
     LoginResponse,
+    PublicOrgItem,
     RefreshTokenRequest,
     RegisterRequest,
     RegisterResponse,
@@ -117,13 +118,42 @@ async def email_login(body: EmailLoginRequest, request: Request, db: AsyncSessio
     return ApiResponse(data=result)
 
 
+# ── 公开组织列表（注册时下拉框数据源，无需认证）─────────────
+
+@router.get("/orgs", response_model=ApiResponse[list[PublicOrgItem]])
+async def list_public_orgs(db: AsyncSession = Depends(get_db)):
+    """返回所有激活组织列表，供注册页下拉框使用，无需认证。"""
+    from app.models.organization import Organization
+    result = await db.execute(
+        select(Organization)
+        .where(Organization.is_active.is_(True), Organization.deleted_at.is_(None))
+        .order_by(Organization.created_at.asc())
+    )
+    orgs = [PublicOrgItem.model_validate(o) for o in result.scalars().all()]
+    return ApiResponse(data=orgs)
+
+
 # ── 公共注册 ─────────────────────────────────────────────
 
 @router.post("/register", response_model=ApiResponse[RegisterResponse])
 async def public_register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     """公共注册（无需邀请）。"""
-    result = await auth_service.register_user(body.name, body.email, body.phone, body.password, db)
-    await hooks.emit("operation_audit", action="auth.registered", target_type="user", target_id=result.user.id, actor_id=result.user.id, org_id=result.user.current_org_id, details={"method": "email"})
+    result = await auth_service.register_user(
+        name=body.name,
+        employee_id=body.employee_id,
+        org_id=body.org_id,
+        password=body.password,
+        email=body.email,
+        phone=body.phone,
+        db=db,
+    )
+    await hooks.emit(
+        "operation_audit",
+        action="auth.registered", target_type="user",
+        target_id=result.user.id, actor_id=result.user.id,
+        org_id=result.user.current_org_id,
+        details={"method": "employee_id"},
+    )
     return ApiResponse(data=result)
 
 

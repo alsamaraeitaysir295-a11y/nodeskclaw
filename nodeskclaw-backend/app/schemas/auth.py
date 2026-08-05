@@ -112,10 +112,12 @@ class LoginResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
-    email: EmailStr
-    phone: str | None = None
-    password: str = Field(min_length=6, max_length=200)
+    name: str = Field(min_length=1, max_length=128)         # 必填：姓名
+    employee_id: str = Field(pattern=r"^\d{8}$")            # 必填：8 位纯数字工号
+    org_id: str = Field(min_length=1)                       # 必填：所属组织 ID
+    password: str = Field(min_length=6, max_length=200)     # 必填：密码
+    email: EmailStr | None = None                           # 可选：邮箱
+    phone: str | None = None                                # 可选：手机号
 
 
 class RegisterResponse(BaseModel):
@@ -126,3 +128,10 @@ class RegisterResponse(BaseModel):
     user: UserInfo
     needs_org_setup: bool = False
     provider: str | None = None
+
+
+class PublicOrgItem(BaseModel):
+    id: str
+    name: str
+
+    model_config = {"from_attributes": True}
