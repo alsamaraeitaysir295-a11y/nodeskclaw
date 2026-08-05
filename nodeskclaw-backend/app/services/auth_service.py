@@ -258,7 +258,9 @@ async def change_password(
 # ── 统一认证 ─────────────────────────────────────────────
 
 
-def _detect_account_type(account: str) -> Literal["email", "phone", "username"]:
+def _detect_account_type(account: str) -> Literal["employee_id", "email", "phone", "username"]:
+    if re.match(r"^\d{8}$", account):     # 精确 8 位纯数字 → 工号
+        return "employee_id"
     if "@" in account:
         return "email"
     if re.match(r"^\+?\d{7,15}$", account):
@@ -312,9 +314,14 @@ async def _login_by_field(
 async def login_with_account(
     account: str, password: str, db: AsyncSession
 ) -> LoginResponse:
-    """Unified account+password login. Auto-detects email vs phone vs username."""
+    """Unified account+password login. Detects employee_id / email / phone / username."""
     account_type = _detect_account_type(account)
 
+    if account_type == "employee_id":
+        return await _login_by_field(
+            account, password, db,
+            where_clause=User.employee_id == account,
+        )
     if account_type == "email":
         return await login_with_email(account, password, db)
 
@@ -508,27 +515,47 @@ async def admin_reset_password(user_id: str, db: AsyncSession) -> str:
 
 async def register_user(
     name: str,
-    email: str,
-    phone: str | None,
+    employee_id: str,
+    org_id: str,
     password: str,
+    email: str | None,
+    phone: str | None,
     db: AsyncSession,
 ) -> LoginResponse:
-    """公共注册：创建用户并分配到默认组织。"""
-    # 检查邮箱唯一性
-    existing = (await db.execute(
-        select(User).where(User.email == email, User.deleted_at.is_(None))
+    """公共注册：校验工号唯一性 + 组织合法性，创建用户并加入所选组织。"""
+    from app.models.organization import Organization
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    # 校验工号唯一性
+    existing_emp = (await db.execute(
+        select(User).where(User.employee_id == employee_id, User.deleted_at.is_(None))
     )).scalar_one_or_none()
-    if existing:
+    if existing_emp:
         raise HTTPException(
             status_code=400,
             detail={
-                "error_code": 40030,
-                "message_key": "errors.auth.email_already_registered",
-                "message": "该邮箱已被注册",
+                "error_code": 40032,
+                "message_key": "errors.auth.employee_id_already_registered",
+                "message": "该工号已被注册",
             },
         )
 
-    # 检查手机号唯一性（如提供）
+    # 校验邮箱唯一性（如提供）
+    if email:
+        existing_email = (await db.execute(
+            select(User).where(User.email == email, User.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        if existing_email:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": 40030,
+                    "message_key": "errors.auth.email_already_registered",
+                    "message": "该邮箱已被注册",
+                },
+            )
+
+    # 校验手机号唯一性（如提供）
     if phone:
         existing_phone = (await db.execute(
             select(User).where(User.phone == phone, User.deleted_at.is_(None))
@@ -543,51 +570,58 @@ async def register_user(
                 },
             )
 
-    # 获取默认组织
-    from app.models.organization import Organization
-    from app.models.org_membership import OrgMembership, OrgRole
-
-    default_org = (await db.execute(
-        select(Organization).where(Organization.slug == "default", Organization.deleted_at.is_(None))
+    # 校验组织合法性
+    org = (await db.execute(
+        select(Organization).where(
+            Organization.id == org_id,
+            Organization.is_active.is_(True),
+            Organization.deleted_at.is_(None),
+        )
     )).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": 40033,
+                "message_key": "errors.auth.org_not_found",
+                "message": "所选组织不存在或已停用",
+            },
+        )
 
-    # 创建用户（不设置 password_hash，在 auth_service 层处理）
+    # 创建用户
     user = User(
         name=name,
-        email=email,
+        employee_id=employee_id,
+        email=email or None,
         phone=phone or None,
         password_hash=hash_password(password),
-        current_org_id=default_org.id if default_org else None,
+        current_org_id=org.id,
     )
     db.add(user)
     await db.flush()
 
-    # 加入默认组织
-    if default_org:
-        db.add(OrgMembership(
-            user_id=user.id,
-            org_id=default_org.id,
-            role=OrgRole.member,
-        ))
-        # RBAC 双写：org_member grant 到 subject_roles
-        from app.services.rbac_sync import grant_role
-        await grant_role(
-            db, subject_type="user", subject_id=user.id,
-            role_key="org_member",
-            scope_type="org", scope_id=default_org.id,
-            granted_reason="register_auto_join",
-        )
+    # 加入所选组织（member 角色）
+    db.add(OrgMembership(
+        user_id=user.id,
+        org_id=org.id,
+        role=OrgRole.member,
+    ))
+    from app.services.rbac_sync import grant_role
+    await grant_role(
+        db, subject_type="user", subject_id=user.id,
+        role_key="org_member",
+        scope_type="org", scope_id=org.id,
+        granted_reason="register_auto_join",
+    )
 
     await db.commit()
     await db.refresh(user)
 
-    # 生成 Token
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(user.id)
 
-    logger.info("新用户注册: id=%s email=%s", user.id, email)
+    logger.info("新用户注册: id=%s employee_id=%s org_id=%s", user.id, employee_id, org.id)
 
-    # 构建 UserInfo（排除 oauth_connections 避免 async 问题）
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
