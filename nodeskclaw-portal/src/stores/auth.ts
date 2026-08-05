@@ -113,21 +113,22 @@ export const useAuthStore = defineStore('auth', () => {
     return data
   }
 
-  async function sendVerificationCode(account: string) {
-    const res = await api.post('/auth/verification-code/send', { account })
-    return res.data
-  }
-
-  async function verificationCodeLogin(account: string, code: string) {
-    const res = await api.post('/auth/verification-code/login', { account, code })
-    const data = res.data.data
-    setTokens(data.access_token, data.refresh_token)
-    user.value = data.user
-    return data
-  }
-
-  async function register(name: string, email: string, password: string, phone?: string) {
-    const res = await api.post('/auth/register', { name, email, password, phone })
+  async function register(
+    name: string,
+    employeeId: string,
+    orgId: string,
+    password: string,
+    email?: string,
+    phone?: string,
+  ) {
+    const res = await api.post('/auth/register', {
+      name,
+      employee_id: employeeId,
+      org_id: orgId,
+      password,
+      email: email || undefined,
+      phone: phone || undefined,
+    })
     const data = res.data.data
     setTokens(data.access_token, data.refresh_token)
     user.value = data.user
@@ -138,7 +139,7 @@ export const useAuthStore = defineStore('auth', () => {
     token, refreshToken, user, systemInfo, isLoggedIn,
     setTokens, clearAuth,
     emailLogin, sendSmsCode, smsLogin,
-    accountLogin, sendVerificationCode, verificationCodeLogin,
+    accountLogin,
     register,
     fetchSystemInfo, fetchUser, logout,
   }
