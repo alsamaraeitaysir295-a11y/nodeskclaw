@@ -16,14 +16,23 @@ NoDeskClaw/
 ├── nodeskclaw-backend/             # 后端 API 服务（Python 3.12 + FastAPI）
 ├── nodeskclaw-llm-proxy/          # LLM Proxy 服务（Python + FastAPI）
 ├── nodeskclaw-artifacts/          # 镜像构建 & 部署制品
-├── openclaw-channel-nodeskclaw/   # DeskClaw channel plugin
+├── openclaw-channel-nodeskclaw/   # DeskClaw channel plugin（Tunnel/工作区通信）
 ├── openclaw-channel-dingtalk/     # DingTalk channel plugin (Stream protocol)
+├── openclaw-channel-learning/     # Gene 演化生态 channel plugin（异步任务处理）
+├── openclaw-security-layer/       # OpenClaw 安全层（Hook 拦截 + WebSocket 转发，无本地安全逻辑）
+├── nanobot-security-layer/        # Nanobot 安全层（monkey-patch 拦截 + WebSocket 转发）
+├── nodeskclaw-tunnel-bridge/      # 非 OpenClaw runtime（Nanobot）接入 tunnel 的 Python 桥接
+├── hermes-nodeskclaw-bridge/      # Hermes runtime 的 tunnel 桥接
+├── deploy/                         # K8s 部署 CLI（cli.sh）与 manifests
+├── scripts/                        # 运维/同步脚本（Gene 推送、文档一致性检查等）
 ├── features.yaml                   # CE/EE Feature 定义
 ├── ee/                             # Enterprise Edition 模块（私有）
 │   └── nodeskclaw-frontend/       # 管理后台前端（EE-only，Vue 3 + shadcn-vue + Tailwind CSS）
 ├── openclaw/                       # DeskClaw 源码（独立仓库）
 └── vibecraft/                      # VibeCraft 源码（独立仓库）
 ```
+
+两个 Security Layer（`openclaw-security-layer`、`nanobot-security-layer`）都是瘦客户端：自身不含安全逻辑，只负责拦截工具调用并通过 WebSocket 转发给后端 `services/security/` 统一评估。
 
 ## 常用命令
 
@@ -67,6 +76,7 @@ cd ee/nodeskclaw-frontend
 npm install
 npm run dev               # 开发服务器 http://localhost:4518
 npm run build             # 构建生产版本
+vue-tsc -b                # 类型检查
 
 # 用户门户
 cd nodeskclaw-portal
@@ -90,6 +100,22 @@ npm run test:watch        # 监听模式
 - **后端**：FastAPI + SQLAlchemy + asyncpg，采用 Service Layer 模式
 - **K8s**：通过 kubectl 与 K8s 集群交互，目标节点架构 `linux/amd64`
 - **DeskClaw 源码**：本地副本位于 `openclaw/src/`，用于调试和问题排查
+
+### Runtime / Compute Provider 双重抽象
+
+实例基础设施操作需要同时兼容两个维度，禁止硬编码任何一侧的特定值：
+
+- **Runtime**（OpenClaw / Nanobot）：网关端口、数据目录、配置文件格式（JSON/YAML）等差异登记在 `RuntimeSpec`（`app/services/runtime/registries/runtime_registry.py` 的 `RUNTIME_REGISTRY`），必须通过 `RUNTIME_REGISTRY.get(runtime_id)` 查取，不能写死
+- **Compute Provider**（K8s / Docker / Process）：文件访问（`PodFS` / `DockerFS`，见 `app/services/nfs_mount.py`）、端口暴露、日志获取、重启方式均不同，新增文件系统或部署操作时必须同时覆盖 `K8sAdapter`、`DockerComputeProvider`、`ProcessComputeProvider` 三套实现，接口签名和返回格式保持一致
+- 判断是否遗漏：改动后自问"换个 runtime/provider 还能跑吗"
+
+### Admin / Portal 用户体系边界
+
+Admin 管理后台（`ee/nodeskclaw-frontend`，EE-only）和用户门户 Portal（`nodeskclaw-portal`）是两个独立的用户身份体系，关联表分别是 `AdminMembership` 和 `OrgMembership`。任何面向 Portal 用户的查询（成员列表、成员计数、协作者选择等）必须显式排除 `AdminMembership` 中的用户，否则会把平台运维账号混进组织成员列表。
+
+### Gene System
+
+模块化能力包体系，模板定义在 `nodeskclaw-backend/app/data/gene_templates/`（JSON，含 `manifest.skill.content`、`manifest.tool_allow`、`manifest.mcp_servers` 等字段）。工作区/Agent 行为、Channel Plugin 工具、后端 Agent 可调用 API 变更后，需评估是否要同步更新对应 Gene 模板并通过 `scripts/upload_seeds_to_genehub.py` 推送到 GeneHub；已安装该 Gene 的实例需要重新部署或触发 `gene_service.install_gene()` 才能同步。
 
 ## K8s 调试常用命令
 
@@ -125,11 +151,15 @@ kubectl get deploy -n <namespace> --context <context-name>
 - **NFS 路径需正确转换**（容器路径 ↔ 本地挂载路径）
 - **修改代码后必须搜索同源逻辑副本并同步修改**
 - **部署脚本必须由用户手动执行**，禁止 AI 直接运行 `deploy/cli.sh`
-- **变更涉及 ≥1 个独立功能点时必须提示用户进入 Plan 模式**
+- **变更涉及 ≥1 个独立功能点时必须提示用户进入 Plan 模式**，Plan 中描述代码改动位置禁止用行号（并发改动会导致行号偏移失效），改用类/函数/文件等语义化定位
 - **K8s 操作必须指定 `--context <name>`**，禁止依赖 current-context 默认值
 - **破坏性操作（删除 namespace/资源、数据库 DELETE、git force push）必须逐项确认**
 - **DeskClaw 行为判断必须有源码依据**，优先读取本地 `openclaw/src/` 副本
 - **自动提交**：每完成一个单元性改动后必须主动提交 commit，不等用户提醒，也不允许攒多个独立改动最后一次性提交
+- **多 Agent 协作时提交必须隔离**：禁止 `git add -A` / `git add .`，只 add 本次改动涉及的文件，避免把其他 Agent 或未完成的改动一起提交
+- **新建目录/子项目必须包含 README**，改代码时必须在同一次操作中更新受影响的文档（EE 设计文档见 `ee/docs/`，各子项目/根 README 按影响范围更新），不允许"下次再补"
+- **产品北极星校验**：任何新功能、改动在 Plan/讨论阶段必须先判断是否服务于"人和 AI 共同经营"这一核心定位；说不清楚具体价值的，先提出质疑而非直接动手
+- **Grep 搜不到不等于不存在**：第一次搜索无结果必须换更宽泛的关键词重试，确认确实不存在后才能下结论，结论需附带实际搜索模式
 - **禁止在代码中出现真人个人信息**，邮箱等占位统一使用 `@example.com`
 
 ### 易踩点沉淀（来自反复出现的真实 bug）
@@ -155,9 +185,11 @@ kubectl get deploy -n <namespace> --context <context-name>
   - 前端展示三级回退：`name → email → UUID 截短 8 位 + …`
   - 模板：参考 `gene_service._attach_uploader_identity` + `Approvals.vue uploaderLabel`（提交 3822f48）
 
+- **文件分发白名单必须与源目录同步**：项目里存在"文件白名单"机制（如 `llm_config_service.py` 中的 `PLUGIN_FILES`）控制哪些文件被复制/分发到实例。新增/删除 `openclaw-channel-nodeskclaw/` 等源目录下的文件后忘记同步白名单，会导致文件没被分发、plugin 加载失败，且报错现象与白名单无关（不易联想到根因）。改动分发类源目录后必须搜索是否存在对应白名单并同步。
+
 ### 问题排查原则
 
-- **先查再答**：不确定的事情先查证，不凭记忆或猜测下结论
+- **先查再答，证据优先**：不确定的事情先查证，不凭记忆、对话上下文或猜测下结论；涉及运行状态/系统行为的结论必须基于工具获取的第一手证据（读文件、跑命令、查日志）
 - **先读代码再写代码**：涉及第三方项目行为必须先读源码确认
 - **端到端验证**：修完后必须验证问题是否真的消失
 - **分层排查**：从最终现象反向逐层验证，每层都要有实际证据
@@ -180,6 +212,6 @@ kubectl get deploy -n <namespace> --context <context-name>
 - type: feat / fix / docs / style / refactor / perf / test / chore
 - subject 必须使用中文
 - 禁止在 commit message 中出现 `Co-authored-by` 标签
-- **社区 PR 必须保留原作者归属**：cherry-pick 保留 author，修复作为独立 commit 叠加，禁止 `--no-commit` 后重新提交
+- **社区 PR 必须保留原作者归属**：合并用 `gh pr merge <number> --rebase`（禁止 `--merge`/`--squash`，会折叠或吞掉原作者 commit）；需要追加修复时用 `git cherry-pick`（禁止 `--no-commit` 后重新提交）保留 author，修复作为独立 commit 叠加在原始 commit 之上；合并前用 `git log --format="%an - %s"` 验证归属
 
 详见 `.cursor/rules/` 下的规则文件。
