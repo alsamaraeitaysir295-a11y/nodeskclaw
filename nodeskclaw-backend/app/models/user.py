@@ -21,11 +21,27 @@ class User(BaseModel):
             "uq_users_username", "username",
             unique=True, postgresql_where=text("deleted_at IS NULL"),
         ),
+        Index(
+            "uq_users_employee_id", "employee_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND employee_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_users_email", "email",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND email IS NOT NULL"),
+        ),
+        Index(
+            "uq_users_phone", "phone",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND phone IS NOT NULL"),
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    email: Mapped[str | None] = mapped_column(String(256), unique=True, nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True)
+    employee_id: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     username: Mapped[str | None] = mapped_column(String(128), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
