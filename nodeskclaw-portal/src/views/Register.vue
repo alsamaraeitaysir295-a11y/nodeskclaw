@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
@@ -7,6 +7,7 @@ import { getCurrentLocale, setCurrentLocale } from '@/i18n'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import { Loader2, Eye, EyeOff, ArrowLeft } from 'lucide-vue-next'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
+import api from '@/services/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -16,21 +17,61 @@ const { t } = useI18n()
 const loading = ref(false)
 const error = ref('')
 
-// 从登录页跳转过来时支持通过 query.email 预填邮箱，避免用户二次输入
-const prefilledEmail = typeof route.query.email === 'string' ? route.query.email : ''
-const form = ref({ name: '', email: prefilledEmail, phone: '', password: '' })
+const form = ref({
+  name: '',
+  employee_id: '',
+  org_id: '',
+  email: '',
+  phone: '',
+  password: '',
+})
 const showPassword = ref(false)
 const locale = ref(getCurrentLocale())
 
-const canSubmit = computed(() => {
-  return form.value.name && form.value.email && form.value.password.length >= 6
-})
+interface OrgItem { id: string; name: string }
+const orgs = ref<OrgItem[]>([])
+const orgsLoading = ref(false)
+const orgsError = ref('')
+
+const employeeIdValid = computed(() => /^\d{8}$/.test(form.value.employee_id))
+const showEmployeeIdError = computed(() =>
+  form.value.employee_id.length > 0 && !employeeIdValid.value
+)
+
+const canSubmit = computed(() =>
+  form.value.name.trim().length > 0 &&
+  employeeIdValid.value &&
+  form.value.org_id.length > 0 &&
+  form.value.password.length >= 6
+)
+
+async function loadOrgs() {
+  orgsLoading.value = true
+  orgsError.value = ''
+  try {
+    const res = await api.get('/auth/orgs')
+    orgs.value = res.data.data ?? []
+  } catch {
+    orgsError.value = t('auth.orgLoadError')
+  } finally {
+    orgsLoading.value = false
+  }
+}
+
+onMounted(loadOrgs)
 
 async function handleSubmit() {
   if (!canSubmit.value || loading.value) return
   loading.value = true
   try {
-    await authStore.register(form.value.name, form.value.email, form.value.password, form.value.phone || undefined)
+    await authStore.register(
+      form.value.name,
+      form.value.employee_id,
+      form.value.org_id,
+      form.value.password,
+      form.value.email || undefined,
+      form.value.phone || undefined,
+    )
     error.value = ''
     router.replace('/')
   } catch (e: any) {
@@ -97,6 +138,7 @@ function onLocaleChange(value: string) {
         </div>
 
         <form class="space-y-4" @submit.prevent="handleSubmit">
+          <!-- 姓名 -->
           <div class="space-y-1.5">
             <label class="text-sm font-medium text-foreground">{{ t('auth.nameLabel') }}</label>
             <input
@@ -108,29 +150,40 @@ function onLocaleChange(value: string) {
             />
           </div>
 
+          <!-- 工号 -->
           <div class="space-y-1.5">
-            <label class="text-sm font-medium text-foreground">{{ t('auth.emailLabel') }}</label>
+            <label class="text-sm font-medium text-foreground">{{ t('auth.employeeIdLabel') }}</label>
             <input
-              v-model="form.email"
-              type="email"
-              inputmode="email"
-              :placeholder="t('auth.emailPlaceholder')"
+              v-model="form.employee_id"
+              type="text"
+              inputmode="numeric"
+              maxlength="8"
+              :placeholder="t('auth.employeeIdPlaceholder')"
               required
               class="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 transition-shadow"
+              :class="showEmployeeIdError ? 'border-destructive focus:ring-destructive' : ''"
             />
+            <p v-if="showEmployeeIdError" class="text-xs text-destructive">{{ t('auth.employeeIdError') }}</p>
           </div>
 
+          <!-- 部门组织 -->
           <div class="space-y-1.5">
-            <label class="text-sm font-medium text-foreground">{{ t('auth.phoneLabel') || '手机号（可选）' }}</label>
-            <input
-              v-model="form.phone"
-              type="tel"
-              inputmode="tel"
-              :placeholder="t('auth.phonePlaceholder') || '可选'"
-              class="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 transition-shadow"
-            />
+            <label class="text-sm font-medium text-foreground">{{ t('auth.orgLabel') }}</label>
+            <select
+              v-model="form.org_id"
+              required
+              class="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 transition-shadow"
+              :class="orgsError ? 'border-destructive' : ''"
+            >
+              <option value="" disabled>
+                {{ orgsLoading ? '加载中...' : t('auth.orgPlaceholder') }}
+              </option>
+              <option v-for="org in orgs" :key="org.id" :value="org.id">{{ org.name }}</option>
+            </select>
+            <p v-if="orgsError" class="text-xs text-destructive">{{ orgsError }}</p>
           </div>
 
+          <!-- 密码 -->
           <div class="space-y-1.5">
             <label class="text-sm font-medium text-foreground">{{ t('auth.passwordLabel') }}</label>
             <div class="relative">
@@ -153,6 +206,32 @@ function onLocaleChange(value: string) {
               </button>
             </div>
             <p class="text-xs text-muted-foreground">{{ t('auth.passwordMinLength') }}</p>
+          </div>
+
+          <!-- 邮箱（可选） -->
+          <div class="space-y-1.5">
+            <label class="text-sm font-medium text-foreground">
+              {{ t('auth.emailLabel') }}<span class="text-muted-foreground text-xs ml-1">（可选）</span>
+            </label>
+            <input
+              v-model="form.email"
+              type="email"
+              inputmode="email"
+              :placeholder="t('auth.emailPlaceholder')"
+              class="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 transition-shadow"
+            />
+          </div>
+
+          <!-- 手机号（可选） -->
+          <div class="space-y-1.5">
+            <label class="text-sm font-medium text-foreground">{{ t('auth.phoneLabel') }}</label>
+            <input
+              v-model="form.phone"
+              type="tel"
+              inputmode="tel"
+              :placeholder="t('auth.phonePlaceholder')"
+              class="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 transition-shadow"
+            />
           </div>
 
           <button

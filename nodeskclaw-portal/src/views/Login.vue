@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import { useConfirm } from '@/composables/useConfirm'
-import { Loader2, Building2, BrainCircuit, Rocket, Target, KeyRound, MessageSquareCode, Eye, EyeOff } from 'lucide-vue-next'
+import { Loader2, Building2, BrainCircuit, Rocket, Target, Eye, EyeOff } from 'lucide-vue-next'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 
 const router = useRouter()
@@ -16,15 +16,9 @@ const { confirm } = useConfirm()
 
 const loading = ref(false)
 const error = ref('')
-const activeTab = ref<'account' | 'code'>('account')
 
 const accountForm = ref({ account: '', password: '' })
 const showPassword = ref(false)
-
-const codeForm = ref({ account: '', code: '' })
-const codeSending = ref(false)
-const codeCountdown = ref(0)
-let codeTimer: ReturnType<typeof setInterval> | null = null
 const locale = ref(getCurrentLocale())
 
 const themes = [
@@ -38,14 +32,6 @@ const canSubmitAccount = computed(() => {
   return accountForm.value.account && accountForm.value.password
 })
 
-function isEmailInput(value: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
-}
-
-const canSubmitCode = computed(() => {
-  return isEmailInput(codeForm.value.account) && codeForm.value.code.length >= 4
-})
-
 // 统一处理"账号未注册"场景：弹出对话框询问是否跳转注册页
 // 返回 true 表示已识别为未注册错误（调用方应短路），false 表示其他错误（继续走通用错误提示）
 async function handleNotRegisteredError(detail: any, prefillAccount: string): Promise<boolean> {
@@ -57,7 +43,6 @@ async function handleNotRegisteredError(detail: any, prefillAccount: string): Pr
     cancelText: t('auth.notRegistered.cancel'),
   })
   if (confirmed) {
-    // 跳转注册页时把账号带过去，避免用户重新输入
     router.push({ path: '/register', query: { email: prefillAccount } })
   }
   return true
@@ -72,54 +57,7 @@ async function handleAccountSubmit() {
     router.replace('/')
   } catch (e: any) {
     const detail = e?.response?.data?.detail
-    // 账号未注册 -> 弹"是否去注册"对话框
     if (await handleNotRegisteredError(detail, accountForm.value.account)) return
-    error.value = resolveApiErrorMessage(e, t('auth.loginFailed'))
-  } finally {
-    loading.value = false
-  }
-}
-
-async function handleSendCode() {
-  if (!codeForm.value.account || codeSending.value || codeCountdown.value > 0) return
-  if (!isEmailInput(codeForm.value.account)) {
-    error.value = t('auth.codeEmailOnly')
-    return
-  }
-  codeSending.value = true
-  try {
-    await authStore.sendVerificationCode(codeForm.value.account)
-    codeCountdown.value = 60
-    codeTimer = setInterval(() => {
-      codeCountdown.value--
-      if (codeCountdown.value <= 0 && codeTimer) {
-        clearInterval(codeTimer)
-        codeTimer = null
-      }
-    }, 1000)
-  } catch (e: any) {
-    const detail = e?.response?.data?.detail
-    if (await handleNotRegisteredError(detail, codeForm.value.account)) return
-    error.value = resolveApiErrorMessage(e, t('auth.sendFailed'))
-  } finally {
-    codeSending.value = false
-  }
-}
-
-async function handleCodeSubmit() {
-  if (!canSubmitCode.value || loading.value) return
-  if (!isEmailInput(codeForm.value.account)) {
-    error.value = t('auth.codeEmailOnly')
-    return
-  }
-  loading.value = true
-  try {
-    await authStore.verificationCodeLogin(codeForm.value.account, codeForm.value.code)
-    error.value = ''
-    router.replace('/')
-  } catch (e: any) {
-    const detail = e?.response?.data?.detail
-    if (await handleNotRegisteredError(detail, codeForm.value.account)) return
     error.value = resolveApiErrorMessage(e, t('auth.loginFailed'))
   } finally {
     loading.value = false
@@ -129,9 +67,6 @@ async function handleCodeSubmit() {
 function onLocaleChange(value: string) {
   locale.value = setCurrentLocale(value)
 }
-
-watch(activeTab, () => { error.value = '' })
-
 </script>
 
 <template>
@@ -236,28 +171,8 @@ watch(activeTab, () => { error.value = '' })
           </p>
         </div>
 
-          <!-- Tab 切换 -->
-          <div class="flex rounded-lg bg-muted p-1 gap-1">
-            <button
-              class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-md text-sm font-medium transition-all"
-              :class="activeTab === 'account' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-              @click="activeTab = 'account'"
-            >
-              <KeyRound class="w-4 h-4" />
-              {{ t('auth.accountPasswordLogin') }}
-            </button>
-            <button
-              class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-md text-sm font-medium transition-all"
-              :class="activeTab === 'code' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
-              @click="activeTab = 'code'"
-            >
-              <MessageSquareCode class="w-4 h-4" />
-              {{ t('auth.emailCodeLogin') }}
-            </button>
-          </div>
-
           <!-- 账号密码表单 -->
-          <form v-if="activeTab === 'account'" class="space-y-4" @submit.prevent="handleAccountSubmit">
+          <form class="space-y-4" @submit.prevent="handleAccountSubmit">
             <div class="space-y-1.5">
               <label class="text-sm font-medium text-foreground">{{ t('auth.accountLabel') }}</label>
               <input
@@ -294,57 +209,6 @@ watch(activeTab, () => { error.value = '' })
             <button
               type="submit"
               :disabled="!canSubmitAccount || loading"
-              class="w-full h-10 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-all hover:shadow-lg hover:shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              <Loader2 v-if="loading" class="w-4 h-4 animate-spin" />
-              {{ t('auth.login') }}
-            </button>
-
-          </form>
-
-          <!-- 验证码表单 -->
-          <form v-if="activeTab === 'code'" class="space-y-4" @submit.prevent="handleCodeSubmit">
-            <div class="space-y-1.5">
-              <label class="text-sm font-medium text-foreground">{{ t('auth.emailLabel') }}</label>
-              <input
-                v-model="codeForm.account"
-                type="email"
-                inputmode="email"
-                :placeholder="t('auth.emailPlaceholder')"
-                required
-                class="w-full h-10 px-3 rounded-lg border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 transition-shadow"
-              />
-              <p class="text-xs text-muted-foreground">{{ t('auth.codeLoginHint') }}</p>
-            </div>
-
-            <div class="space-y-1.5">
-              <label class="text-sm font-medium text-foreground">{{ t('auth.codeLabel') }}</label>
-              <div class="flex gap-2">
-                <input
-                  v-model="codeForm.code"
-                  type="text"
-                  inputmode="numeric"
-                  maxlength="6"
-                  :placeholder="t('auth.codePlaceholder')"
-                  required
-                  class="flex-1 h-10 px-3 rounded-lg border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 transition-shadow"
-                />
-                <button
-                  type="button"
-                  :disabled="!isEmailInput(codeForm.account) || codeSending || codeCountdown > 0"
-                  class="shrink-0 h-10 px-4 rounded-lg border border-input text-sm font-medium hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                  @click="handleSendCode"
-                >
-                  <Loader2 v-if="codeSending" class="w-4 h-4 animate-spin" />
-                  <template v-else-if="codeCountdown > 0">{{ codeCountdown }}s</template>
-                  <template v-else>{{ t('auth.sendCode') }}</template>
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              :disabled="!canSubmitCode || loading"
               class="w-full h-10 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-all hover:shadow-lg hover:shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               <Loader2 v-if="loading" class="w-4 h-4 animate-spin" />
