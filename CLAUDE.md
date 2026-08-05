@@ -4,214 +4,93 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-DeskClaw（曾用名 NoDeskClaw）— DeskClaw 实例可视化管理平台，通过 Web 界面管理 K8s 集群上的 DeskClaw 实例，支持一键部署、实时日志、集群健康巡检、飞书 SSO 登录。
+DeskClaw（曾用名 NoDeskClaw）— DeskClaw 实例可视化管理平台，通过 Web 界面管理 K8s 集群上的 DeskClaw 实例。
 
-采用 CE（社区版）/ EE（企业版）双版本架构：CE 为本仓库开源部分，EE 在私有 `ee/` 目录。运行时通过 `FeatureGate` 判断版本：优先读取 `NODESKCLAW_EDITION` 环境变量（`ce`/`ee`），未设置时检测 `ee/` 目录是否存在。`./dev.sh ce` 会自动设置此环境变量以确保后端以 CE 模式运行。
+CE（社区版，本仓库）/ EE（企业版，私有 `ee/` 目录）双版本架构。`FeatureGate` 判断版本：优先读 `NODESKCLAW_EDITION` 环境变量，未设置时检测 `ee/` 是否存在。`./dev.sh ce` 会强制 CE 模式。
 
 ## 项目结构
 
 ```
-NoDeskClaw/
-├── nodeskclaw-portal/              # 用户门户前端（CE + EE，Vue 3 + Tailwind CSS）
-├── nodeskclaw-backend/             # 后端 API 服务（Python 3.12 + FastAPI）
-├── nodeskclaw-llm-proxy/          # LLM Proxy 服务（Python + FastAPI）
-├── nodeskclaw-artifacts/          # 镜像构建 & 部署制品
-├── openclaw-channel-nodeskclaw/   # DeskClaw channel plugin（Tunnel/工作区通信）
-├── openclaw-channel-dingtalk/     # DingTalk channel plugin (Stream protocol)
-├── openclaw-channel-learning/     # Gene 演化生态 channel plugin（异步任务处理）
-├── openclaw-security-layer/       # OpenClaw 安全层（Hook 拦截 + WebSocket 转发，无本地安全逻辑）
-├── nanobot-security-layer/        # Nanobot 安全层（monkey-patch 拦截 + WebSocket 转发）
-├── nodeskclaw-tunnel-bridge/      # 非 OpenClaw runtime（Nanobot）接入 tunnel 的 Python 桥接
-├── hermes-nodeskclaw-bridge/      # Hermes runtime 的 tunnel 桥接
-├── deploy/                         # K8s 部署 CLI（cli.sh）与 manifests
-├── scripts/                        # 运维/同步脚本（Gene 推送、文档一致性检查等）
-├── features.yaml                   # CE/EE Feature 定义
-├── ee/                             # Enterprise Edition 模块（私有）
-│   └── nodeskclaw-frontend/       # 管理后台前端（EE-only，Vue 3 + shadcn-vue + Tailwind CSS）
-├── openclaw/                       # DeskClaw 源码（独立仓库）
-└── vibecraft/                      # VibeCraft 源码（独立仓库）
+nodeskclaw-portal/                 # 用户门户前端（CE+EE，Vue3+Tailwind）
+nodeskclaw-backend/                # 后端 API（Python 3.12 + FastAPI）
+nodeskclaw-llm-proxy/              # LLM Proxy（Python + FastAPI）
+nodeskclaw-artifacts/              # 镜像构建 & 部署制品
+openclaw-channel-nodeskclaw/       # DeskClaw channel plugin（tunnel/工作区通信）
+openclaw-channel-dingtalk/         # DingTalk channel plugin
+openclaw-channel-learning/         # Gene 演化生态 channel plugin
+openclaw-security-layer/           # OpenClaw 安全层
+nanobot-security-layer/            # Nanobot 安全层（二者均为瘦客户端：拦截工具调用转发给后端 services/security/ 统一评估，自身无安全逻辑）
+nodeskclaw-tunnel-bridge/          # Nanobot 接入 tunnel 的 Python 桥接
+hermes-nodeskclaw-bridge/          # Hermes runtime 的 tunnel 桥接
+deploy/                            # K8s 部署 CLI（cli.sh）+ manifests
+scripts/                           # 运维脚本（Gene 推送、文档一致性检查等）
+features.yaml                      # EE 功能清单
+ee/                                # EE 私有模块；ee/nodeskclaw-frontend 是 Admin 管理后台（EE-only）
+openclaw/, vibecraft/              # 依赖的独立源码仓库（本地副本，用于调试）
 ```
-
-两个 Security Layer（`openclaw-security-layer`、`nanobot-security-layer`）都是瘦客户端：自身不含安全逻辑，只负责拦截工具调用并通过 WebSocket 转发给后端 `services/security/` 统一评估。
 
 ## 常用命令
 
-### 一键启动
-
 ```bash
-./dev.sh         # 自动检测：ee/ 存在 -> EE，否则 -> CE
-./dev.sh ce      # 强制 CE 模式（即使存在 ee/ 目录，后端也以 CE 运行）
-./dev.sh ee      # 强制 EE 模式（backend + portal + admin）
+./dev.sh [ce|ee]              # 一键启动，自动检测 ee/ 存在与否
+
+# 后端
+cd nodeskclaw-backend && uv sync && uv run uvicorn app.main:app --reload --port 4510
+uv run pytest [path::test]    # 测试
+uv run ruff check [--fix] .   # lint
+
+# 前端
+cd nodeskclaw-portal && npm install && npm run dev       # :4517，npm run test 跑 vitest
+cd ee/nodeskclaw-frontend && npm install && npm run dev  # :4518（EE-only），vue-tsc -b 类型检查
 ```
 
-### Docker Compose 部署
+Docker Compose：`docker compose up -d`（CE）/ 加 `-f docker-compose.ee.yml`（EE）。Windows 必须显式设置 `NODESKCLAW_DATA_DIR`。
 
-```bash
-docker compose up -d                     # CE 模式（默认）
-docker compose -f docker-compose.yml -f docker-compose.ee.yml up -d  # EE 模式
+## i18n
 
-# 可选：需要自定义 JWT_SECRET / 飞书 SSO 等配置时
-# cp .env.example nodeskclaw-backend/.env && vi nodeskclaw-backend/.env
-```
-
-Docker Compose 部署自动配置 Docker socket 挂载和数据目录映射，支持创建 Docker 类型集群。Mac/Linux 默认使用 `$HOME/.nodeskclaw/docker-instances`，Windows 必须显式设置 `NODESKCLAW_DATA_DIR`，后端容器内 `DOCKER_DATA_DIR` 固定为 `/nodeskclaw-data`，`NODESKCLAW_EDITION` 由 compose 文件自动设置。
-
-### 后端（Python）
-
-```bash
-cd nodeskclaw-backend
-uv sync                    # 安装依赖（首次）
-uv run uvicorn app.main:app --reload --port 4510
-uv run pytest              # 运行所有测试
-uv run pytest app/services/test_xxx.py::test_foo  # 运行单个测试
-uv run ruff check .        # 代码检查
-uv run ruff check --fix . # 自动修复
-```
-
-### 前端
-
-```bash
-# 管理前端（EE-only）
-cd ee/nodeskclaw-frontend
-npm install
-npm run dev               # 开发服务器 http://localhost:4518
-npm run build             # 构建生产版本
-vue-tsc -b                # 类型检查
-
-# 用户门户
-cd nodeskclaw-portal
-npm install
-npm run dev               # 开发服务器 http://localhost:4517
-npm run build
-npm run test              # 运行测试（vitest）
-npm run test -- --run src/components/xxx.spec.ts  # 运行单个测试
-npm run test:watch        # 监听模式
-```
-
-## i18n 国际化
-
-- 覆盖范围：`nodeskclaw-portal`、`ee/nodeskclaw-frontend`、`nodeskclaw-backend`
-- 前端错误展示：优先使用后端 `message_key` 本地翻译，词条缺失时回退 `message`
-- 后端失败响应：`code` + `error_code` + `message_key` + `message` + `data`
+- 覆盖 `nodeskclaw-portal` / `ee/nodeskclaw-frontend` / `nodeskclaw-backend`
+- 前端优先用 `message_key` 本地翻译，缺失回退 `message`；后端失败响应含 `code`+`error_code`+`message_key`+`message`+`data`
 
 ## 代码架构
 
-- **前端**：双前端架构。`ee/nodeskclaw-frontend`（Admin 管理后台）仅 EE 版部署，CE 用户只有 `nodeskclaw-portal`（用户门户）。图标统一使用 `lucide-vue-next`
-- **后端**：FastAPI + SQLAlchemy + asyncpg，采用 Service Layer 模式
-- **K8s**：通过 kubectl 与 K8s 集群交互，目标节点架构 `linux/amd64`
-- **DeskClaw 源码**：本地副本位于 `openclaw/src/`，用于调试和问题排查
-
-### Runtime / Compute Provider 双重抽象
-
-实例基础设施操作需要同时兼容两个维度，禁止硬编码任何一侧的特定值：
-
-- **Runtime**（OpenClaw / Nanobot）：网关端口、数据目录、配置文件格式（JSON/YAML）等差异登记在 `RuntimeSpec`（`app/services/runtime/registries/runtime_registry.py` 的 `RUNTIME_REGISTRY`），必须通过 `RUNTIME_REGISTRY.get(runtime_id)` 查取，不能写死
-- **Compute Provider**（K8s / Docker / Process）：文件访问（`PodFS` / `DockerFS`，见 `app/services/nfs_mount.py`）、端口暴露、日志获取、重启方式均不同，新增文件系统或部署操作时必须同时覆盖 `K8sAdapter`、`DockerComputeProvider`、`ProcessComputeProvider` 三套实现，接口签名和返回格式保持一致
-- 判断是否遗漏：改动后自问"换个 runtime/provider 还能跑吗"
-
-### Admin / Portal 用户体系边界
-
-Admin 管理后台（`ee/nodeskclaw-frontend`，EE-only）和用户门户 Portal（`nodeskclaw-portal`）是两个独立的用户身份体系，关联表分别是 `AdminMembership` 和 `OrgMembership`。任何面向 Portal 用户的查询（成员列表、成员计数、协作者选择等）必须显式排除 `AdminMembership` 中的用户，否则会把平台运维账号混进组织成员列表。
-
-### Gene System
-
-模块化能力包体系，模板定义在 `nodeskclaw-backend/app/data/gene_templates/`（JSON，含 `manifest.skill.content`、`manifest.tool_allow`、`manifest.mcp_servers` 等字段）。工作区/Agent 行为、Channel Plugin 工具、后端 Agent 可调用 API 变更后，需评估是否要同步更新对应 Gene 模板并通过 `scripts/upload_seeds_to_genehub.py` 推送到 GeneHub；已安装该 Gene 的实例需要重新部署或触发 `gene_service.install_gene()` 才能同步。
-
-## K8s 调试常用命令
-
-```bash
-# 查看 Pod 状态
-kubectl get pods -n <namespace> --context <context-name>
-
-# 查看 Pod 详情和 Events
-kubectl describe pod <pod-name> -n <namespace> --context <context-name>
-
-# 查看 Pod 日志
-kubectl logs <pod-name> -n <namespace> --context <context-name> --tail=30
-
-# 查看集群 Events
-kubectl get events -n <namespace> --context <context-name> --sort-by='.lastTimestamp'
-
-# 查看 Deployment 状态
-kubectl get deploy -n <namespace> --context <context-name>
-```
-
-**重要**：所有 kubectl 命令必须显式指定 `--context <name>`，禁止依赖 current-context 默认值。
+- **前端**：双前端，`nodeskclaw-portal`（CE+EE 用户门户）与 `ee/nodeskclaw-frontend`（EE-only Admin）。图标统一 `lucide-vue-next`
+- **后端**：FastAPI + SQLAlchemy + asyncpg，Service Layer 模式
+- **DeskClaw 源码**：本地副本 `openclaw/src/`，判断 DeskClaw 行为必须以此为依据
+- **Runtime/Provider 双重抽象**：Runtime（OpenClaw/Nanobot，端口/数据目录/配置格式差异）查 `RuntimeSpec`（`app/services/runtime/registries/runtime_registry.py`），禁止硬编码；Compute Provider（K8s/Docker/Process）文件访问走 `PodFS`/`DockerFS`（`app/services/nfs_mount.py`），新增能力需同时覆盖三种 provider 实现
+- **Admin/Portal 用户体系**：两套独立身份体系（`AdminMembership` vs `OrgMembership`），面向 Portal 的查询必须排除 Admin 用户
+- **Gene System**：模块化能力包，模板在 `app/data/gene_templates/`，Agent/Channel/API 行为变更需评估同步模板并用 `scripts/upload_seeds_to_genehub.py` 推送
 
 ## 关键规则
 
-### 必须遵守
+- 禁止 emoji，图标用 `lucide-vue-next`；Docker 操作必须 `--platform linux/amd64`
+- K8s/DeskClaw 问题必须用 kubectl 实际查看集群状态判断，不凭猜测；kubectl 命令必须显式 `--context <name>`，禁止依赖 current-context
+- 数据删除一律软删除（`deleted_at`），唯一约束用 Partial Unique Index
+- Model 改动必须同步生成 Alembic 迁移（`alembic revision --autogenerate`），禁止手写 revision ID
+- JSONC 解析前剥离行注释；NFS 路径需容器路径 ↔ 本地路径正确转换
+- 修改一处逻辑后必须搜索同源副本同步修改（常见于两个前端的 slug 生成/表单校验/`api.ts`）
+- 部署脚本（`deploy/cli.sh`）必须用户手动执行，AI 禁止直接跑；破坏性操作（K8s 删除、DB DELETE、force push）必须逐项确认
+- 改动 ≥1 个独立功能点先进入 Plan 模式；Plan 中禁止用行号定位代码（并发编辑会失效），改用类/函数/文件
+- 每完成一个独立改动立即 commit，不攒批；多 Agent 协作时只 `git add` 本次改动文件，禁止 `git add -A/.`
+- 新建目录/子项目必须有 README；改代码要同步受影响文档（设计文档存 `ee/docs/`，CE 仓库不建 `docs/` 目录）
+- 任何新功能先判断是否服务于"人和 AI 共同经营"这一产品定位，说不清价值就先质疑
+- Grep 搜不到不等于不存在：换更宽泛关键词重试确认后才能下结论
+- 排查问题必须端到端验证 + 分层用证据排查（前端→后端→K8s→镜像），不凭猜测/对话上下文下结论
+- 代码中禁止真人个人信息，占位统一 `@example.com`
 
-- **禁止使用 emoji**，图标统一使用 `lucide-vue-next`
-- **Docker 操作必须指定 `--platform linux/amd64`**（开发机 Apple Silicon arm64，目标集群 amd64）
-- **涉及 K8s/DeskClaw 问题必须用 kubectl 实际查看集群状态**
-- **所有数据删除必须软删除**（设置 `deleted_at`），唯一约束使用 Partial Unique Index
-- **新增/修改 Model 必须同步生成 Alembic 迁移**（`uv run alembic revision --autogenerate`），禁止手写 revision ID
-- **JSONC 配置文件解析前必须剥离行注释**
-- **NFS 路径需正确转换**（容器路径 ↔ 本地挂载路径）
-- **修改代码后必须搜索同源逻辑副本并同步修改**
-- **部署脚本必须由用户手动执行**，禁止 AI 直接运行 `deploy/cli.sh`
-- **变更涉及 ≥1 个独立功能点时必须提示用户进入 Plan 模式**，Plan 中描述代码改动位置禁止用行号（并发改动会导致行号偏移失效），改用类/函数/文件等语义化定位
-- **K8s 操作必须指定 `--context <name>`**，禁止依赖 current-context 默认值
-- **破坏性操作（删除 namespace/资源、数据库 DELETE、git force push）必须逐项确认**
-- **DeskClaw 行为判断必须有源码依据**，优先读取本地 `openclaw/src/` 副本
-- **自动提交**：每完成一个单元性改动后必须主动提交 commit，不等用户提醒，也不允许攒多个独立改动最后一次性提交
-- **多 Agent 协作时提交必须隔离**：禁止 `git add -A` / `git add .`，只 add 本次改动涉及的文件，避免把其他 Agent 或未完成的改动一起提交
-- **新建目录/子项目必须包含 README**，改代码时必须在同一次操作中更新受影响的文档（EE 设计文档见 `ee/docs/`，各子项目/根 README 按影响范围更新），不允许"下次再补"
-- **产品北极星校验**：任何新功能、改动在 Plan/讨论阶段必须先判断是否服务于"人和 AI 共同经营"这一核心定位；说不清楚具体价值的，先提出质疑而非直接动手
-- **Grep 搜不到不等于不存在**：第一次搜索无结果必须换更宽泛的关键词重试，确认确实不存在后才能下结论，结论需附带实际搜索模式
-- **禁止在代码中出现真人个人信息**，邮箱等占位统一使用 `@example.com`
+## 易踩点（反复出现的真实 bug，遇到相关代码区先看这里）
 
-### 易踩点沉淀（来自反复出现的真实 bug）
+- **Gene 按 slug 查询禁用 `scalar_one_or_none()`**：fork 后同 slug 可在多 scope（personal/org/public）并存，唯一约束是 `(slug, org_id)` 非全局。取一条用 `.scalars().first()`；精确定位用 `gene_service.get_gene_by_slug_in_scope()`
+- **Windows 异步子进程需同步 fallback**：`asyncio.create_subprocess_exec` 在 Windows SelectorEventLoop 抛 `NotImplementedError`（`str()` 为空串，易被通用 `except` 吞掉），需单独捕获后走 `asyncio.to_thread(subprocess.run, ...)`
+- **审核入口需对操作者自身权限做 bypass**：admin/超管自上传不该走 `pending_owner`，用 `is_user_admin_of_org()` 判定后传 `bypass_review`（涉及 `/genes/upload-folder`、`/genes/manual`、`fork_gene_to_library` 三处）
+- **审核/审计列表禁裸显 UUID**：`created_by`/`user_id` 等字段服务层批量 join `User` 表填姓名/邮箱（不要 N+1），前端三级回退 `name → email → UUID 截短`
+- **文件分发白名单需与源目录同步**：如 `llm_config_service.py` 的 `PLUGIN_FILES`，新增/删除分发类源文件后必须同步白名单，否则文件不生效且报错现象与根因无关联
 
-> 这些是项目特有的、不读源码看不出来的"陷阱"。每条都对应过线上 bug 和提交记录，遇到相关代码区时必须先回看本节。
+## Git 规范
 
-- **Gene 表按 slug 查询禁用 `scalar_one_or_none()`**：fork 三向架构（personal/org/public）落地后，同 slug 可在多 scope 并存，DB partial unique 是 `(slug, org_id)` 而非全局 slug。按 slug 单字段查会触发 `MultipleResultsFound` 让接口直接 500。
-  - 列表/兜底取一条：用 `.scalars().first()`
-  - 按 scope 精确定位：用 `gene_service.get_gene_by_slug_in_scope(slug, org_id, created_by)`
-  - 已踩位置：`gene_service.get_gene_by_slug` / `local_adapter.get_skill / get_manifest / get_synergies / report_install`（提交 e57b168、46242a5）
+- 分支 `<type>/<kebab-case-description>`（`feat/fix/refactor/chore/docs/perf/test/build`），禁止无意义名/纯日期名
+- Commit/PR 标题：`<type>(<scope>): <中文描述>`，subject 中文祈使语态，禁止 `Co-authored-by`
+- 社区 PR 合并用 `gh pr merge --rebase`（禁止 `--merge`/`--squash`）保留原作者归属；追加修复用 `git cherry-pick`（禁止 `--no-commit`）
 
-- **Windows 跨平台异步子进程必须有同步 fallback**：`asyncio.create_subprocess_exec` 在 Windows SelectorEventLoop 上抛 `NotImplementedError`，`str(NotImplementedError())` 是空字符串，被通用 `except Exception` 吞了之后前端只看到「连接失败:」尾巴空白。
-  - 正确写法：单独 `except NotImplementedError:` 分支调用 `asyncio.to_thread(subprocess.run, ...)` 同步路径
-  - 已踩位置：`cluster_service._create_docker_cluster`（已修）/ `_test_docker_connection`（漏改，提交 46242a5 补）
+---
 
-- **审核/审批类入口默认对"操作者本身有审核权"做 bypass**：admin / 平台超管自上传走 `pending_owner` 没有意义——自己审自己一点击就过，还会让审核中心多出无效条目。
-  - 派生函数（如 `resolve_target_attrs`）加 `bypass_review` 参数；调用前用 `is_user_admin_of_org(db, user_id, org_id, is_super_admin)` 判定
-  - 三个入口必须同步：`/genes/upload-folder`、`/genes/manual`、`fork_gene_to_library`
-  - 前端 toast 也要按返回的 `review_status` 切「已加载」vs「等待审核」（参考提交 f53b900）
-
-- **审核/审计/管理类列表禁裸显 UUID**：`created_by` / `user_id` / `resource_id` 这种字段对人类读者无意义，前端必须能显示姓名/邮箱。
-  - 服务层批量注入：按 ID 集合一次性 join `User` 表填 `created_by_name` / `created_by_email`，**不要 N+1**
-  - 前端展示三级回退：`name → email → UUID 截短 8 位 + …`
-  - 模板：参考 `gene_service._attach_uploader_identity` + `Approvals.vue uploaderLabel`（提交 3822f48）
-
-- **文件分发白名单必须与源目录同步**：项目里存在"文件白名单"机制（如 `llm_config_service.py` 中的 `PLUGIN_FILES`）控制哪些文件被复制/分发到实例。新增/删除 `openclaw-channel-nodeskclaw/` 等源目录下的文件后忘记同步白名单，会导致文件没被分发、plugin 加载失败，且报错现象与白名单无关（不易联想到根因）。改动分发类源目录后必须搜索是否存在对应白名单并同步。
-
-### 问题排查原则
-
-- **先查再答，证据优先**：不确定的事情先查证，不凭记忆、对话上下文或猜测下结论；涉及运行状态/系统行为的结论必须基于工具获取的第一手证据（读文件、跑命令、查日志）
-- **先读代码再写代码**：涉及第三方项目行为必须先读源码确认
-- **端到端验证**：修完后必须验证问题是否真的消失
-- **分层排查**：从最终现象反向逐层验证，每层都要有实际证据
-
-### 敏感信息隔离
-
-- 文档、设计资产默认放 `ee/` 私有仓库，CE 仅保留代码和最小必要公开文件
-- `.cursor/rules/*.mdc` 禁止包含 IP、域名、Token、密钥等敏感信息
-- 代码中发现真人信息必须立即替换并提交
-
-### Git 规范
-
-- **分支命名**：`<type>/<kebab-case-description>`（如 `feat/operation-audit`、`fix/deploy-env-serialize`），禁止无意义名称和纯日期名称
-- **PR 标题**：与 commit message 格式一致 `<type>(<scope>): <中文描述>`，概括整个 PR 的变更目标
-
-```
-<type>(<scope>): <subject>
-```
-
-- type: feat / fix / docs / style / refactor / perf / test / chore
-- subject 必须使用中文
-- 禁止在 commit message 中出现 `Co-authored-by` 标签
-- **社区 PR 必须保留原作者归属**：合并用 `gh pr merge <number> --rebase`（禁止 `--merge`/`--squash`，会折叠或吞掉原作者 commit）；需要追加修复时用 `git cherry-pick`（禁止 `--no-commit` 后重新提交）保留 author，修复作为独立 commit 叠加在原始 commit 之上；合并前用 `git log --format="%an - %s"` 验证归属
-
-详见 `.cursor/rules/` 下的规则文件。
+详见 `.cursor/rules/` 下的规则文件（编码风格、K8s 操作、CE/EE 边界等细则）。
