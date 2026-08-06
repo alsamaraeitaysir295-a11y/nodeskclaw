@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { useAdminApi } from '@/services/adminApi'
 import { useToast } from '@/composables/useToast'
 import { useFeature } from '@/composables/useFeature'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import { Building2, Plus, Pencil, Trash2, Loader2, Search, X, Check } from 'lucide-vue-next'
 
-const { t } = useI18n()
 const router = useRouter()
 const toast = useToast()
 const { isEnabled: platformAdminEnabled } = useFeature('platform_admin')
@@ -77,7 +75,7 @@ function openEdit(org: Awaited<ReturnType<typeof fetchOrgs>>[number]) {
 
 async function submitCreate() {
   if (!form.value.name.trim() || !form.value.slug.trim()) {
-    toast.warning(t('admin.orgs.nameAndSlugRequired'))
+    toast.warning('名称和 Slug 不能为空')
     return
   }
   createLoading.value = true
@@ -87,18 +85,18 @@ async function submitCreate() {
       const updated = await updateOrg(editingOrgId.value, form.value)
       const idx = orgs.value.findIndex(o => o.id === editingOrgId.value)
       if (idx !== -1) orgs.value[idx] = updated
-      toast.success(t('admin.orgs.updated'))
+      toast.success('组织已更新')
     } else {
       const newOrg = await createOrg(form.value)
       orgs.value.push(newOrg)
-      toast.success(t('admin.orgs.created'))
+      toast.success('组织已创建')
     }
     showCreate.value = false
     isEditing.value = false
     editingOrgId.value = null
     resetForm()
   } catch (e: unknown) {
-    toast.error(resolveApiErrorMessage(e, isEditing.value ? t('admin.orgs.updateFailed') : t('admin.orgs.createFailed')))
+    toast.error(resolveApiErrorMessage(e, isEditing.value ? '更新组织失败' : '创建组织失败'))
   } finally {
     createLoading.value = false
   }
@@ -110,10 +108,10 @@ async function submitDelete() {
   try {
     await deleteOrg(deleteConfirm.value)
     orgs.value = orgs.value.filter(o => o.id !== deleteConfirm.value)
-    toast.success(t('admin.orgs.deleted'))
+    toast.success('组织已删除')
     deleteConfirm.value = null
   } catch (e: unknown) {
-    toast.error(resolveApiErrorMessage(e, t('admin.orgs.deleteFailed')))
+    toast.error(resolveApiErrorMessage(e, '删除组织失败'))
   } finally {
     deleteLoading.value = false
   }
@@ -128,7 +126,7 @@ onMounted(async () => {
   try {
     orgs.value = await fetchOrgs()
   } catch (e: unknown) {
-    toast.error(resolveApiErrorMessage(e, t('admin.orgs.loadFailed')))
+    toast.error(resolveApiErrorMessage(e, '加载组织列表失败'))
   } finally {
     loading.value = false
   }
@@ -139,15 +137,15 @@ onMounted(async () => {
   <div class="space-y-5">
     <div class="flex items-center justify-between">
       <div>
-        <h2 class="text-lg font-semibold">{{ t('admin.orgs.title') }}</h2>
-        <p class="text-sm text-muted-foreground mt-0.5">{{ t('admin.orgs.subtitle') }}</p>
+        <h2 class="text-lg font-semibold">组织管理</h2>
+        <p class="text-sm text-muted-foreground mt-0.5">管理所有租户组织</p>
       </div>
       <button
         class="flex items-center gap-2 h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         @click="showCreate = true; resetForm()"
       >
         <Plus class="w-4 h-4" />
-        {{ t('admin.orgs.create') }}
+        新建组织
       </button>
     </div>
 
@@ -156,7 +154,7 @@ onMounted(async () => {
       <input
         v-model="search"
         type="text"
-        :placeholder="t('admin.orgs.searchPlaceholder')"
+        placeholder="搜索组织名称或 Slug..."
         class="h-9 w-full pl-9 pr-3 rounded-lg border border-border bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
       />
       <button v-if="search" class="absolute right-3 top-1/2 -translate-y-1/2" @click="search = ''">
@@ -172,12 +170,12 @@ onMounted(async () => {
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border bg-muted/40">
-            <th class="text-left font-medium text-muted-foreground px-4 py-3">{{ t('admin.orgs.colName') }}</th>
-            <th class="text-left font-medium text-muted-foreground px-4 py-3 hidden md:table-cell">{{ t('admin.orgs.colSlug') }}</th>
-            <th class="text-left font-medium text-muted-foreground px-4 py-3 hidden lg:table-cell">{{ t('admin.orgs.colPlan') }}</th>
-            <th class="text-right font-medium text-muted-foreground px-4 py-3">{{ t('admin.orgs.colInstances') }}</th>
-            <th class="text-right font-medium text-muted-foreground px-4 py-3 hidden sm:table-cell">{{ t('admin.orgs.colCreated') }}</th>
-            <th class="text-right font-medium text-muted-foreground px-4 py-3">{{ t('admin.common.actions') }}</th>
+            <th class="text-left font-medium text-muted-foreground px-4 py-3">名称</th>
+            <th class="text-left font-medium text-muted-foreground px-4 py-3 hidden md:table-cell">Slug</th>
+            <th class="text-left font-medium text-muted-foreground px-4 py-3 hidden lg:table-cell">套餐</th>
+            <th class="text-right font-medium text-muted-foreground px-4 py-3">实例数</th>
+            <th class="text-right font-medium text-muted-foreground px-4 py-3 hidden sm:table-cell">创建时间</th>
+            <th class="text-right font-medium text-muted-foreground px-4 py-3">操作</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-border">
@@ -187,7 +185,7 @@ onMounted(async () => {
                 <Building2 class="w-4 h-4 text-muted-foreground shrink-0" />
                 <span class="font-medium">{{ org.name }}</span>
                 <span v-if="!org.is_active" class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-red-500/15 text-red-400">
-                  {{ t('admin.orgs.inactive') }}
+                  已停用
                 </span>
               </div>
             </td>
@@ -207,10 +205,10 @@ onMounted(async () => {
             <!-- @click.stop 防止行点击冒泡触发路由跳转 -->
             <td class="px-4 py-3 text-right" @click.stop>
               <div class="flex items-center justify-end gap-1">
-                <button class="p-1.5 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors" :title="t('admin.common.edit')" @click="openEdit(org)">
+                <button class="p-1.5 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors" title="编辑" @click="openEdit(org)">
                   <Pencil class="w-3.5 h-3.5" />
                 </button>
-                <button class="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors" :title="t('admin.common.delete')" @click="deleteConfirm = org.id">
+                <button class="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors" title="删除" @click="deleteConfirm = org.id">
                   <Trash2 class="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -218,7 +216,7 @@ onMounted(async () => {
           </tr>
           <tr v-if="filteredOrgs.length === 0">
             <td colspan="6" class="px-4 py-12 text-center text-muted-foreground">
-              {{ search ? t('admin.orgs.noResults') : t('admin.orgs.empty') }}
+              {{ search ? '未找到匹配的组织' : '暂无组织数据' }}
             </td>
           </tr>
         </tbody>
@@ -229,38 +227,38 @@ onMounted(async () => {
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div class="w-full max-w-md rounded-xl border border-border bg-card shadow-xl">
         <div class="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h3 class="font-semibold">{{ isEditing ? t('admin.orgs.editTitle') : t('admin.orgs.createTitle') }}</h3>
+          <h3 class="font-semibold">{{ isEditing ? '编辑组织' : '新建组织' }}</h3>
           <button class="p-1 rounded hover:bg-muted/60" @click="cancelCreate">
             <X class="w-4 h-4" />
           </button>
         </div>
         <div class="px-5 py-4 space-y-4">
           <div>
-            <label class="block text-sm font-medium mb-1.5">{{ t('admin.orgs.name') }} *</label>
-            <input v-model="form.name" type="text" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" :placeholder="t('admin.orgs.namePlaceholder')" />
+            <label class="block text-sm font-medium mb-1.5">组织名称 *</label>
+            <input v-model="form.name" type="text" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" placeholder="如：ABC 制造" />
           </div>
           <div>
-            <label class="block text-sm font-medium mb-1.5">{{ t('admin.orgs.slug') }} *</label>
-            <input v-model="form.slug" type="text" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary" :placeholder="t('admin.orgs.slugPlaceholder')" />
+            <label class="block text-sm font-medium mb-1.5">Slug *</label>
+            <input v-model="form.slug" type="text" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary" placeholder="abc-manufacturing" />
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="block text-sm font-medium mb-1.5">{{ t('admin.orgs.plan') }}</label>
+              <label class="block text-sm font-medium mb-1.5">套餐</label>
               <input v-model="form.plan" type="text" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
             </div>
             <div>
-              <label class="block text-sm font-medium mb-1.5">{{ t('admin.orgs.maxInstances') }}</label>
+              <label class="block text-sm font-medium mb-1.5">最大实例数</label>
               <input v-model.number="form.max_instances" type="number" min="1" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
             </div>
           </div>
         </div>
         <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-border">
           <button class="h-9 px-4 rounded-lg border border-border text-sm hover:bg-muted/50 transition-colors" @click="cancelCreate">
-            {{ t('admin.common.cancel') }}
+            取消
           </button>
           <button class="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50" :disabled="createLoading" @click="submitCreate">
             <Loader2 v-if="createLoading" class="w-4 h-4 animate-spin" />
-            <template v-else><Check class="w-4 h-4 inline mr-1" />{{ isEditing ? t('admin.common.save') : t('admin.common.create') }}</template>
+            <template v-else><Check class="w-4 h-4 inline mr-1" />{{ isEditing ? '保存' : '创建' }}</template>
           </button>
         </div>
       </div>
@@ -270,18 +268,18 @@ onMounted(async () => {
     <div v-if="deleteConfirm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div class="w-full max-w-sm rounded-xl border border-border bg-card shadow-xl">
         <div class="px-5 py-4 border-b border-border">
-          <h3 class="font-semibold">{{ t('admin.orgs.deleteTitle') }}</h3>
+          <h3 class="font-semibold">删除组织</h3>
         </div>
         <div class="px-5 py-4">
-          <p class="text-sm text-muted-foreground">{{ t('admin.orgs.deleteConfirm') }}</p>
+          <p class="text-sm text-muted-foreground">确定要删除此组织吗？删除后无法恢复。</p>
         </div>
         <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-border">
           <button class="h-9 px-4 rounded-lg border border-border text-sm hover:bg-muted/50 transition-colors" @click="deleteConfirm = null">
-            {{ t('admin.common.cancel') }}
+            取消
           </button>
           <button class="h-9 px-4 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-50" :disabled="deleteLoading" @click="submitDelete">
             <Loader2 v-if="deleteLoading" class="w-4 h-4 animate-spin" />
-            <template v-else>{{ t('admin.common.delete') }}</template>
+            <template v-else>删除</template>
           </button>
         </div>
       </div>

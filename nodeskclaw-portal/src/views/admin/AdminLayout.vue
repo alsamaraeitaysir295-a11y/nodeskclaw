@@ -41,9 +41,9 @@ import { Home, Building2, Users, ToggleLeft, ClipboardList } from 'lucide-vue-ne
 
 // 侧边栏导航项定义
 const navItems = [
-  { to: '/admin/orgs', icon: Building2, label: 'Orgs' },
-  { to: '/admin/users', icon: Users, label: 'Users' },
-  { to: '/admin/features', icon: ToggleLeft, label: 'Features' },
-  { to: '/admin/audit', icon: ClipboardList, label: 'Audit' },
+  { to: '/admin/orgs', icon: Building2, label: '组织' },
+  { to: '/admin/users', icon: Users, label: '用户' },
+  { to: '/admin/features', icon: ToggleLeft, label: '功能开关' },
+  { to: '/admin/audit', icon: ClipboardList, label: '审计日志' },
 ]
 </script>

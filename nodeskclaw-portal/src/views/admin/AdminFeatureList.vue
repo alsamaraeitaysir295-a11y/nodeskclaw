@@ -7,7 +7,7 @@
     <table class="w-full text-sm">
       <thead>
         <tr class="text-left border-b">
-          <th class="pb-2 pr-4">Feature</th>
+          <th class="pb-2 pr-4">功能标识</th>
           <th class="pb-2 pr-4">名称</th>
           <th class="pb-2 pr-4">描述</th>
           <th class="pb-2 pr-4">默认</th>

@@ -26,7 +26,7 @@
     <section v-if="active === 'overview'" v-show="org">
       <dl class="grid grid-cols-2 gap-y-2 text-sm">
         <dt>Slug</dt><dd>{{ org?.slug }}</dd>
-        <dt>Plan</dt><dd>{{ org?.plan }}</dd>
+        <dt>套餐</dt><dd>{{ org?.plan }}</dd>
         <dt>实例数</dt><dd>{{ org?.instance_count }} / {{ org?.max_instances }}</dd>
         <dt>CPU</dt><dd>{{ org?.total_cpu }} / {{ org?.max_cpu_total }}</dd>
         <dt>内存</dt><dd>{{ org?.total_mem }} / {{ org?.max_mem_total }}</dd>
@@ -58,9 +58,9 @@
                   class="text-sm border border-border rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
                   @change="onRoleChange(m, $event)"
                 >
-                  <option value="admin">admin</option>
-                  <option value="operator">operator</option>
-                  <option value="member">member</option>
+                  <option value="admin">admin（管理员）</option>
+                  <option value="operator">operator（操作员）</option>
+                  <option value="member">member（成员）</option>
                 </select>
               </td>
               <td class="px-4 py-3 text-muted-foreground">{{ m.joined_at }}</td>
@@ -87,7 +87,7 @@
         <table class="w-full text-sm border-collapse">
           <thead class="bg-muted/50">
             <tr>
-              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[25%]">Feature</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[25%]">功能标识</th>
               <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[10%]">状态</th>
               <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">来源</th>
               <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">原因</th>

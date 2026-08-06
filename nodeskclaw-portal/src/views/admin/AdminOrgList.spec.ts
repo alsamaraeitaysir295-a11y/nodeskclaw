@@ -43,9 +43,6 @@ vi.mock('@/composables/useFeature', () => ({
 vi.mock('@/i18n/error', () => ({
   resolveApiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (k: string) => k }),
-}))
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }))
@@ -67,12 +64,12 @@ describe('AdminOrgList', () => {
     await new Promise(r => setTimeout(r))
 
     // 点击编辑按钮
-    const editBtn = wrapper.find('button[title="admin.common.edit"]')
+    const editBtn = wrapper.find('button[title="编辑"]')
     await editBtn.trigger('click')
 
     // 弹窗应显示并预填 name（找 placeholder 为 namePlaceholder 的输入框）
-    expect(wrapper.text()).toContain('admin.orgs.editTitle')
-    const nameInput = wrapper.find('input[placeholder="admin.orgs.namePlaceholder"]')
+    expect(wrapper.text()).toContain('编辑组织')
+    const nameInput = wrapper.find('input[placeholder="如：ABC 制造"]')
     expect((nameInput.element as HTMLInputElement).value).toBe('Org1')
   })
 })
