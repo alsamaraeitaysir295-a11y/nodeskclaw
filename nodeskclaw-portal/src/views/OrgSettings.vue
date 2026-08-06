@@ -3,7 +3,8 @@ import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useOrgStore } from '@/stores/org'
-import { Settings, Users, Dna, FolderOpen, Mail, Server, Building2, Container, ScrollText, Globe, Cpu, Layers, KeyRound } from 'lucide-vue-next'
+import { useFeature } from '@/composables/useFeature'
+import { Settings, Users, Dna, FolderOpen, Mail, Server, Building2, Container, ScrollText, Globe, Cpu, Layers, KeyRound, BarChart3 } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -15,6 +16,7 @@ interface NavItem {
   label: () => string
   icon: typeof Settings
   matchPrefix?: string
+  feature?: string  // 关联的 feature_id；未启用时该 Tab 不展示
 }
 
 // 组织设置侧边栏导航项；EE/CE 现已共享同一份菜单（集群/Registry/SMTP 等不再 CE 独占）
@@ -26,6 +28,7 @@ const allNavItems: NavItem[] = [
   { name: 'OrgSettingsSpecs', label: () => t('orgSettings.specsTab'), icon: Cpu },
   { name: 'OrgMembers', label: () => t('orgSettings.humanMembers'), icon: Users },
   { name: 'OrgSettingsLlmKeys', label: () => t('orgSettings.llmKeysTab'), icon: KeyRound },
+  { name: 'OrgSettingsLlmAnalytics', label: () => t('orgSettings.llmAnalyticsTab'), icon: BarChart3, feature: 'llm_analytics' },
   { name: 'OrgSettingsGenes', label: () => t('orgSettings.requiredGenesTab'), icon: Dna },
   { name: 'OrgSettingsSmtp', label: () => t('orgSettings.smtpTitle'), icon: Mail },
   { name: 'OrgSettingsNetwork', label: () => t('orgSettings.networkTab'), icon: Globe },
@@ -33,9 +36,13 @@ const allNavItems: NavItem[] = [
   { name: 'OrgSettingsAudit', label: () => t('auditLogs.title'), icon: ScrollText },
 ]
 
-// 仅根据"路由是否真实存在"做过滤，避免渲染 EE 端未注册的路由（如 OrgEnterpriseFiles）
+// 先按"路由是否真实存在"过滤（避免渲染 EE 端未注册的路由，如 OrgEnterpriseFiles），
+// 再按关联 feature 是否启用过滤（避免未开通该 feature 的组织点进去被路由守卫重定向）
 const navItems = computed(() =>
-  allNavItems.filter(item => router.hasRoute(item.name))
+  allNavItems.filter(item =>
+    router.hasRoute(item.name) &&
+    (!item.feature || useFeature(item.feature).isEnabled.value)
+  )
 )
 
 function isActive(item: NavItem): boolean {

@@ -95,6 +95,7 @@ const ceRoutes: RouteRecordRaw[] = [
       { path: 'specs', name: 'OrgSettingsSpecs', component: () => import('@/views/OrgSettingsSpecs.vue') },
       { path: 'genes', name: 'OrgSettingsGenes', component: () => import('@/views/OrgSettingsGenes.vue') },
       { path: 'llm-keys', name: 'OrgSettingsLlmKeys', component: () => import('@/views/OrgSettingsLlmKeys.vue') },
+      { path: 'llm-analytics', name: 'OrgSettingsLlmAnalytics', component: () => import('@/views/OrgSettingsLlmAnalytics.vue'), meta: { requiresAuth: true, requireFeature: 'llm_analytics' } },
       { path: 'smtp', name: 'OrgSettingsSmtp', component: () => import('@/views/OrgSettingsSmtp.vue') },
       { path: 'network', name: 'OrgSettingsNetwork', component: () => import('@/views/OrgSettingsNetwork.vue') },
       { path: 'members', name: 'OrgMembers', component: () => import('@/views/OrgMembers.vue') },
