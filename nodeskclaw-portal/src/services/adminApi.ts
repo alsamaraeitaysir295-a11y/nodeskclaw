@@ -64,6 +64,8 @@ export interface AdminFeatureItem {
 
 export interface AdminOrgFeatureState {
   feature_id: string
+  name: string
+  description: string
   enabled: boolean
   source: FeatureSource
   default_enabled: boolean

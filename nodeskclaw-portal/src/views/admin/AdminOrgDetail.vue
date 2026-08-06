@@ -87,16 +87,18 @@
         <table class="w-full text-sm border-collapse">
           <thead class="bg-muted/50">
             <tr>
-              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[25%]">功能标识</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[15%]">功能标识</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">功能名称</th>
               <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[10%]">状态</th>
-              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">来源</th>
-              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">原因</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[15%]">来源</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[15%]">原因</th>
               <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[25%]">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border">
             <tr v-for="f in features" :key="f.feature_id" class="hover:bg-muted/30 transition-colors">
               <td class="px-4 py-3 font-mono text-xs">{{ f.feature_id }}</td>
+              <td class="px-4 py-3">{{ f.name }}</td>
               <td class="px-4 py-3">
                 <span
                   class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
@@ -137,7 +139,7 @@
               </td>
             </tr>
             <tr v-if="features.length === 0">
-              <td colspan="5" class="px-4 py-8 text-center text-sm text-muted-foreground">暂无功能开关数据</td>
+              <td colspan="6" class="px-4 py-8 text-center text-sm text-muted-foreground">暂无功能开关数据</td>
             </tr>
           </tbody>
         </table>
