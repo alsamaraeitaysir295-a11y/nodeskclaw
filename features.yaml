@@ -10,54 +10,54 @@ edition_features:
   ee:
     # ── 现有功能（需从 CE 仓库迁移到 ee/） ──
     - id: multi_org
-      name: Multi-Organization Management
+      name: 多组织管理
       description: 多组织创建、切换、成员管理
 
     - id: billing
-      name: Plans & Billing
+      name: 套餐与计费
       description: 套餐管理、配额检查、用量统计
 
     - id: admin_members
-      name: Admin Platform Members
+      name: 管理平台成员
       description: 管理平台成员（多管理员角色）
 
     - id: platform_admin
-      name: Platform Admin Pages
+      name: 超管页面
       description: 超管页面（Organizations / Users / Plans / OrgMembers / OrgLlmKeys）
 
     - id: enterprise_files
-      name: Enterprise File Browser
+      name: 企业文件浏览器
       description: 企业空间文件浏览
 
     - id: org_smtp_config
-      name: Organization SMTP Config
+      name: 组织 SMTP 配置
       description: 组织级 SMTP 界面配置
 
     - id: topology_audit
-      name: Topology Audit Log
+      name: 拓扑变更审计日志
       description: 赛博办公室拓扑变更审计日志
 
     - id: performance_analytics
-      name: Performance Analytics
+      name: 性能分析
       description: AI 员工性能快照采集与分析
 
     - id: llm_analytics
-      name: LLM Usage Analytics
+      name: LLM 用量分析
       description: LLM 用量统计报表
 
     - id: akr_management
-      name: AKR Management
+      name: AKR 管理
       description: 组织级 AKR 汇总老板视图
 
     # ── 未来功能（代码将在 ee/ 仓库中新增） ──
     - id: advanced_audit
-      name: Advanced Operation Audit
+      name: 高级操作审计
       description: 全局操作审计中间件 + 查询导出
 
     - id: sso_ldap
-      name: LDAP/SAML SSO
+      name: LDAP/SAML 单点登录
       description: 企业级 SSO 认证集成
 
     - id: advanced_rbac
-      name: Advanced RBAC
+      name: 高级角色权限控制
       description: 细粒度角色权限控制

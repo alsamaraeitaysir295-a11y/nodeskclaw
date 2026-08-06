@@ -90,19 +90,25 @@ async def list_org_features(db: AsyncSession, *, org_id: str) -> list[dict[str, 
         ).scalars().all()
     }
     out: list[dict[str, Any]] = []
-    for fid in sorted(_all_feature_ids()):
+    for f in feature_gate.all_features():
+        fid = f["id"]
         default = _default_enabled(fid)
         row = overrides.get(fid)
+        base = {
+            "feature_id": fid,
+            "name": f.get("name", fid),
+            "description": f.get("description", ""),
+        }
         if row is None:
             out.append({
-                "feature_id": fid,
+                **base,
                 "enabled": default,
                 "source": "default",
                 "default_enabled": default,
             })
         else:
             out.append({
-                "feature_id": fid,
+                **base,
                 "enabled": row.enabled,
                 "source": "override",
                 "default_enabled": default,
