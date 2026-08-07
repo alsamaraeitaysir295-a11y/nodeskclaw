@@ -8,20 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.models.admin_membership import AdminMembership
 from app.models.base import not_deleted
-from app.models.org_membership import OrgMembership, OrgRole
+from app.models.org_membership import ADMIN_ROLE_LEVEL, OrgMembership, OrgRole
 from app.models.user import User
 from app.models.workspace import Workspace
-from app.models.workspace_member import (
-    WORKSPACE_PERMISSIONS,
-    WorkspaceMember,
-)
+from app.models.workspace_member import WorkspaceMember
 
-# 使用权限：同 org 任意成员均可执行
-WORKSPACE_USE_PERMISSIONS = {"send_chat", "edit_blackboard"}
-# 配置权限：仅创建者或 org_admin 可执行
-WORKSPACE_CONFIG_PERMISSIONS = {
-    "manage_settings", "manage_agents", "manage_members",
-    "delete_workspace", "edit_topology",
+# 每个权限对应的最低组织角色等级；三档均满足即放行，不再区分"使用/配置"两档
+WORKSPACE_PERMISSION_MIN_ROLE: dict[str, str] = {
+    "send_chat": OrgRole.member,
+    "edit_blackboard": OrgRole.operator,
+    "manage_agents": OrgRole.operator,
+    "edit_topology": OrgRole.operator,
+    "manage_settings": OrgRole.admin,
+    "manage_members": OrgRole.admin,
+    "delete_workspace": OrgRole.admin,
 }
 
 logger = logging.getLogger(__name__)
@@ -63,11 +63,10 @@ async def check_workspace_access(
     user: User,
     required_permission: str,
     db: AsyncSession,
-) -> WorkspaceMember | None:
+) -> None:
     """Check that *user* has *required_permission* on the workspace.
 
-    使用权限（send_chat、edit_blackboard）：同 org 任意成员均可。
-    配置权限（manage_*、delete_workspace、edit_topology）：仅创建者或 org_admin。
+    纯组织三级角色驱动：不再看创建者身份，也不再查 WorkspaceMember 角色字段。
     返回 None 表示通过，抛出 ForbiddenError / NotFoundError 表示拒绝。
     """
     workspace = await _get_workspace(workspace_id, db)
@@ -75,30 +74,22 @@ async def check_workspace_access(
         raise NotFoundError("办公室不存在", "errors.workspace.not_found")
 
     org_role = await _get_org_role(user.id, workspace.org_id, db)
-
-    # 配置权限：仅创建者或 org_admin
-    if required_permission in WORKSPACE_CONFIG_PERMISSIONS:
-        if org_role == OrgRole.admin or workspace.created_by == user.id:
-            return None
-        raise ForbiddenError("仅创建者或管理员可修改配置", "errors.workspace.creator_required")
-
-    # 使用权限：同 org 任意成员
-    if required_permission in WORKSPACE_USE_PERMISSIONS:
-        if org_role is not None:
-            return None
+    if org_role is None:
         raise ForbiddenError("您不是该组织的成员", "errors.workspace.no_access")
 
-    # 未知权限兜底：仅 org_admin 通过
-    if org_role == OrgRole.admin:
-        return None
-    raise ForbiddenError("权限不足", "errors.workspace.insufficient_permission")
+    min_role = WORKSPACE_PERMISSION_MIN_ROLE.get(required_permission, OrgRole.admin)
+    user_level = ADMIN_ROLE_LEVEL.get(org_role, 0)
+    min_level = ADMIN_ROLE_LEVEL[min_role]
+    if user_level < min_level:
+        raise ForbiddenError(f"需要 {min_role} 及以上角色", "errors.workspace.insufficient_permission")
+    return None
 
 
 async def check_workspace_member(
     workspace_id: str,
     user: User,
     db: AsyncSession,
-) -> WorkspaceMember | None:
+) -> None:
     """Check that *user* is a member of the workspace (read-only access).
 
     同 org 任意成员均可通过基础访问检查。
@@ -126,24 +117,19 @@ async def get_my_permissions(
         raise NotFoundError("办公室不存在", "errors.workspace.not_found")
 
     org_role = await _get_org_role(user.id, workspace.org_id, db)
+    if org_role is None:
+        raise ForbiddenError("您不是该组织的成员", "errors.workspace.no_access")
 
-    # 创建者或 org_admin：拥有全部权限
-    if org_role == OrgRole.admin or workspace.created_by == user.id:
-        return {
-            "is_admin": True,
-            "is_org_admin": org_role == OrgRole.admin,
-            "permissions": list(WORKSPACE_PERMISSIONS),
-        }
-
-    # 同 org 普通成员：使用权限（聊天、黑板）
-    if org_role is not None:
-        return {
-            "is_admin": False,
-            "is_org_admin": False,
-            "permissions": list(WORKSPACE_USE_PERMISSIONS),
-        }
-
-    raise ForbiddenError("您不是该组织的成员", "errors.workspace.no_access")
+    user_level = ADMIN_ROLE_LEVEL.get(org_role, 0)
+    permissions = [
+        perm for perm, min_role in WORKSPACE_PERMISSION_MIN_ROLE.items()
+        if user_level >= ADMIN_ROLE_LEVEL[min_role]
+    ]
+    return {
+        "is_admin": org_role == OrgRole.admin,
+        "is_org_admin": org_role == OrgRole.admin,
+        "permissions": permissions,
+    }
 
 
 async def search_org_users(
