@@ -210,7 +210,7 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/approvals',
     name: 'Approvals',
     component: () => import('@/views/Approvals.vue'),
-    meta: { requiresAuth: true, requireAdminOrSuper: true },
+    meta: { requiresAuth: true, requiredOrgRole: 'operator' },
   },
   {
     // 申请加入组织：受 multi_org feature gate 保护，CE 模式访问会被路由守卫拦截到首页
@@ -279,13 +279,13 @@ router.beforeEach(async (to, _from, next) => {
       return next('/')
     }
 
-    // 申请审核中心守卫：超管或任意组织 admin 可进
-    if (
-      to.meta.requireAdminOrSuper &&
-      !authStore.user?.is_super_admin &&
-      authStore.user?.portal_org_role !== 'admin'
-    ) {
-      return next('/')
+    // 申请审核中心守卫：超管或达到 requiredOrgRole 等级的组织成员可进
+    const requiredOrgRole = to.meta.requiredOrgRole as 'member' | 'operator' | 'admin' | undefined
+    if (requiredOrgRole && !authStore.user?.is_super_admin) {
+      const { hasOrgRoleLevel } = await import('@/utils/orgRole')
+      if (!hasOrgRoleLevel(authStore.user?.portal_org_role, requiredOrgRole)) {
+        return next('/')
+      }
     }
   }
 

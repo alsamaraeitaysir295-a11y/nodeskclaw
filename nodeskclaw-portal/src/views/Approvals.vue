@@ -283,6 +283,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ClipboardCheck, Check, X } from 'lucide-vue-next'
+import { useAuthStore } from '@/stores/auth'
+import { hasOrgRoleLevel } from '@/utils/orgRole'
 import { useGeneStore, type GeneItem } from '@/stores/gene'
 import { useToast } from '@/composables/useToast'
 import { useFeature } from '@/composables/useFeature'
@@ -301,26 +303,35 @@ import {
 const { t, locale } = useI18n()
 const store = useGeneStore()
 const toast = useToast()
+const authStore = useAuthStore()
 const { isEnabled: hasMultiOrg } = useFeature('multi_org')
 
-// 五类申请 Tab：skills 默认启用；joinRequests / leaveRequests 受 multi_org 控制；其余暂占位
+// 五类申请 Tab：skills 默认启用；joinRequests / leaveRequests 受 multi_org 控制，且仅组织 admin/超管可见；其余暂占位
 type TabKey = 'skills' | 'joinRequests' | 'leaveRequests' | 'account' | 'feature'
 interface TabDef {
   key: TabKey
   labelKey: string
   disabled: boolean
   requireFeature?: string
+  requireOrgAdmin?: boolean
 }
 const allTabs: TabDef[] = [
   { key: 'skills', labelKey: 'approvals.tabSkills', disabled: false },
-  { key: 'joinRequests', labelKey: 'approvals.tabJoinRequests', disabled: false, requireFeature: 'multi_org' },
-  { key: 'leaveRequests', labelKey: 'approvals.tabLeaveRequests', disabled: false, requireFeature: 'multi_org' },
+  { key: 'joinRequests', labelKey: 'approvals.tabJoinRequests', disabled: false, requireFeature: 'multi_org', requireOrgAdmin: true },
+  { key: 'leaveRequests', labelKey: 'approvals.tabLeaveRequests', disabled: false, requireFeature: 'multi_org', requireOrgAdmin: true },
   { key: 'account', labelKey: 'approvals.tabAccount', disabled: true },
   { key: 'feature', labelKey: 'approvals.tabFeature', disabled: true },
 ]
-// 仅渲染当前 edition 实际可用的 Tab（multi_org 关闭时同时隐藏 join + leave）
+// 加入/退出组织 Tab 仅组织 admin 或超管可见（审核中心其余 Tab 已放宽给 operator）
+const isOrgAdminOrSuper = computed(
+  () => authStore.user?.is_super_admin || hasOrgRoleLevel(authStore.user?.portal_org_role, 'admin'),
+)
+// 仅渲染当前 edition 实际可用的 Tab（multi_org 关闭时同时隐藏 join + leave），并叠加组织 admin 权限过滤
 const visibleTabs = computed(() =>
-  allTabs.filter(t => !t.requireFeature || (t.requireFeature === 'multi_org' && hasMultiOrg.value)),
+  allTabs.filter(t =>
+    (!t.requireFeature || (t.requireFeature === 'multi_org' && hasMultiOrg.value)) &&
+    (!t.requireOrgAdmin || isOrgAdminOrSuper.value)
+  ),
 )
 const activeTab = ref<TabKey>('skills')
 
