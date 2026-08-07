@@ -81,7 +81,7 @@ async def check_workspace_access(
     user_level = ADMIN_ROLE_LEVEL.get(org_role, 0)
     min_level = ADMIN_ROLE_LEVEL[min_role]
     if user_level < min_level:
-        raise ForbiddenError(f"需要 {min_role} 及以上角色", "errors.workspace.insufficient_permission")
+        raise ForbiddenError(f"需要 {min_role.value} 及以上角色", "errors.workspace.insufficient_permission")
     return None
 
 
