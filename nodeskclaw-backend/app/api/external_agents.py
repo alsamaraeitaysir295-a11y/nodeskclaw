@@ -1,7 +1,7 @@
 """外部专用 Agent 的 REST API 路由。
 
-CRUD 操作需要 org admin 权限；
-聊天端点（SSE）仅需普通登录用户。
+创建/更新/同步连接需要 org operator 及以上权限；删除仍需 org admin 权限；
+列表查询所有登录成员可见；聊天端点（SSE）仅需普通登录用户。
 """
 
 import asyncio
@@ -15,7 +15,13 @@ from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import async_session_factory, get_current_org, get_db, require_org_admin
+from app.core.deps import (
+    async_session_factory,
+    get_current_org,
+    get_db,
+    require_org_admin,
+    require_org_member_role,
+)
 from app.schemas.common import ApiResponse
 from app.schemas.external_agent import (
     AttachmentItem,
@@ -69,9 +75,9 @@ def _to_response(agent) -> ExternalAgentResponse:
 async def create_agent(
     body: ExternalAgentCreate,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("operator")),
 ):
-    """创建外部 Agent 连接配置（需要 org admin）。"""
+    """创建外部 Agent 连接配置（需要 org operator 及以上）。"""
     _, org = auth
     agent = await external_agent_service.create_external_agent(
         org_id=org.id,
@@ -104,9 +110,9 @@ async def update_agent(
     agent_id: str,
     body: ExternalAgentUpdate,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("operator")),
 ):
-    """更新外部 Agent 配置（需要 org admin）。"""
+    """更新外部 Agent 配置（需要 org operator 及以上）。"""
     _, org = auth
     updates = body.model_dump(exclude_none=True)
     agent = await external_agent_service.update_external_agent(
@@ -135,9 +141,9 @@ async def delete_agent(
 async def sync_agent(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("operator")),
 ):
-    """验证外部 Agent 连接可达性，更新 is_reachable（需要 org admin）。
+    """验证外部 Agent 连接可达性，更新 is_reachable（需要 org operator 及以上）。
 
     NAP 协议额外调用 /meta，将 capabilities / description 同步回数据库。
     """
