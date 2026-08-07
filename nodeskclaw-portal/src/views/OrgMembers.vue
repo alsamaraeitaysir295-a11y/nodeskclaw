@@ -32,6 +32,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { copyToClipboard } from '@/utils/clipboard'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
 import { submitLeaveRequest, listMyLeaveRequests } from '@/services/orgLeaveApi'
+import { hasOrgRoleLevel } from '@/utils/orgRole'
 
 const orgStore = useOrgStore()
 const authStore = useAuthStore()
@@ -72,10 +73,25 @@ const resetResultPassword = ref('')
 const resetCopied = ref(false)
 
 const isOrgAdmin = computed(() => authStore.user?.portal_org_role === 'admin')
+// 用于"人类成员"页操作区（角色下拉/移除/重置密码）的可见性门槛，operator 及以上可管理成员
+const isOrgOperatorOrAbove = computed(() => hasOrgRoleLevel(authStore.user?.portal_org_role, 'operator'))
 
 const roleOptions = computed(() =>
   roles.value.map(r => ({ value: r.id, label: t(r.name_key) }))
 )
+// 仅供"已有成员"角色下拉使用，与邀请对话框的 roleOptions 完全独立：
+// - 恒定包含 member/operator
+// - 仅当操作者自己是 admin 时才额外包含 admin（呼应后端 operator 不能晋升任何人为 admin 的能力上限）
+const memberRoleOptions = computed(() => {
+  const options = [
+    { value: 'member', label: t('orgMembers.roleMember') },
+    { value: 'operator', label: t('orgMembers.roleOperator') },
+  ]
+  if (isOrgAdmin.value) {
+    options.push({ value: 'admin', label: t('orgMembers.roleAdmin') })
+  }
+  return options
+})
 
 const filteredMembers = computed(() => {
   if (!searchQuery.value) return orgStore.members
@@ -472,17 +488,11 @@ function goJoinOrganization() {
             </div>
           </div>
 
-          <!-- Actions (admin only, not self) -->
-          <div v-if="isOrgAdmin && member.user_id !== authStore.user?.id" class="flex items-center gap-2">
-            <span
-              v-if="member.role === 'operator'"
-              class="px-2.5 py-1 text-xs rounded-md border border-border bg-card text-muted-foreground cursor-not-allowed"
-              :title="t('orgMembers.roleOperatorLocked')"
-            >{{ t('orgMembers.roleOperator') }}</span>
+          <!-- Actions (operator+ only, not self) -->
+          <div v-if="isOrgOperatorOrAbove && member.user_id !== authStore.user?.id" class="flex items-center gap-2">
             <CustomSelect
-              v-else
               :model-value="member.role"
-              :options="roleOptions"
+              :options="memberRoleOptions"
               size="xs"
               :disabled="actionLoading === member.id"
               @update:model-value="(v: string | null) => handleRoleChange(member, v!)"
