@@ -2694,7 +2694,8 @@ async def review_gene(
                 select(OrgMembership).where(
                     OrgMembership.user_id == current_user.id,
                     OrgMembership.org_id == gene.org_id,
-                    OrgMembership.role == OrgRole.admin,
+                    # 审核门槛放宽为 operator 及以上（原仅 admin 可审核）
+                    OrgMembership.role.in_([OrgRole.operator, OrgRole.admin]),
                     OrgMembership.deleted_at.is_(None),
                 )
             )).scalar_one_or_none()
@@ -2766,13 +2767,14 @@ async def review_gene_overwrite_submission(
     if submission.review_status not in (GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin):
         raise BadRequestError(f"当前状态 '{submission.review_status}' 不可审核")
 
-    # ── 权限校验：超管 / 该提交所属 org 的 admin，与 review_gene() 保持一致 ──
+    # ── 权限校验：超管 / 该提交所属 org 的 operator 及以上，与 review_gene() 保持一致 ──
     if current_user is not None and not getattr(current_user, "is_super_admin", False):
         membership = (await db.execute(
             select(OrgMembership).where(
                 OrgMembership.user_id == current_user.id,
                 OrgMembership.org_id == submission.org_id,
-                OrgMembership.role == OrgRole.admin,
+                # 审核门槛放宽为 operator 及以上（原仅 admin 可审核）
+                OrgMembership.role.in_([OrgRole.operator, OrgRole.admin]),
                 OrgMembership.deleted_at.is_(None),
             )
         )).scalar_one_or_none()
@@ -3558,19 +3560,19 @@ async def get_pending_review_genes(
         )).scalars().all()
         return await _merge_pending_review_items(db, gene_rows, submission_rows)
 
-    # 普通用户 → 查其作为 admin 的所有 org_id
+    # 普通用户 → 查其作为 operator 及以上（审核门槛放宽，原仅 admin）的所有 org_id
     from app.models.org_membership import OrgMembership, OrgRole
 
     admin_orgs_result = await db.execute(
         select(OrgMembership.org_id).where(
             OrgMembership.user_id == current_user.id,
-            OrgMembership.role == OrgRole.admin,
+            OrgMembership.role.in_([OrgRole.operator, OrgRole.admin]),
             OrgMembership.deleted_at.is_(None),
         )
     )
     admin_org_ids = [row[0] for row in admin_orgs_result.all()]
     if not admin_org_ids:
-        # 既不是超管也不是任何 org admin → 无可见待审项
+        # 既不是超管也不是任何 org operator/admin → 无可见待审项
         return []
 
     gene_rows = (await db.execute(
