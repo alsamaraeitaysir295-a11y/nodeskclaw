@@ -255,8 +255,26 @@ async def add_member(org_id: str, user_id: str, role: str, db: AsyncSession) -> 
     )
 
 
-async def update_member_role(org_id: str, membership_id: str, role: str, db: AsyncSession) -> MemberInfo:
-    """修改成员角色。membership_id 可以是 OrgMembership.id 或 user_id，两者均可匹配。"""
+async def update_member_role(
+    org_id: str, membership_id: str, role: str, db: AsyncSession, *, actor: User,
+) -> MemberInfo:
+    """修改成员角色。membership_id 可以是 OrgMembership.id 或 user_id，两者均可匹配。
+
+    能力上限：非超管且自身角色不是 admin 的 actor（即 operator），不能把任何人
+    （包括自己）的角色设为 admin。
+    """
+    if role == OrgRole.admin and not getattr(actor, "is_super_admin", False):
+        # 查询操作者自身在本组织的成员记录，判断其当前角色是否已是 admin
+        actor_membership = (await db.execute(
+            select(OrgMembership).where(
+                OrgMembership.user_id == actor.id,
+                OrgMembership.org_id == org_id,
+                not_deleted(OrgMembership),
+            )
+        )).scalar_one_or_none()
+        if actor_membership is None or actor_membership.role != OrgRole.admin:
+            raise ForbiddenError("操作者无权将成员设为管理员", "errors.org.cannot_promote_to_admin")
+
     result = await db.execute(
         select(OrgMembership, User)
         .join(User, OrgMembership.user_id == User.id)

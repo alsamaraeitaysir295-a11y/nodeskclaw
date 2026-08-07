@@ -74,5 +74,9 @@ async def test_update_member_role_rejects_soft_deleted_user_membership(require_t
         db.add_all([org, deleted_user, membership])
         await db.commit()
 
+        # 用超管身份作为 actor，绕过能力上限校验（is_super_admin=True 时不查 actor 自身的
+        # OrgMembership），从而让测试聚焦于原本要验证的意图：目标软删除用户应命中 NotFoundError。
+        actor = User(id="user-actor-soft-delete-role", name="Actor", username="actor-role", is_super_admin=True)
+
         with pytest.raises(NotFoundError, match="成员记录不存在"):
-            await update_member_role(org.id, membership.id, OrgRole.admin, db)
+            await update_member_role(org.id, membership.id, OrgRole.admin, db, actor=actor)

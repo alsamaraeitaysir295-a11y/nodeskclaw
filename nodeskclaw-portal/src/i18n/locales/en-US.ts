@@ -1887,6 +1887,7 @@ const enUS = {
       cannot_reset_own_password: "Cannot reset your own password. Please change it in Settings.",
       cannot_reset_admin_password: "Cannot reset another admin's password",
       member_not_found: "This user is not a member of the current organization",
+      cannot_promote_to_admin: "Operators cannot promote members to admin",
     },
     cluster: {
       id_required: "Please select a cluster first",

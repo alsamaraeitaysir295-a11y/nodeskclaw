@@ -13,6 +13,7 @@ from app.core.deps import (
     require_feature,
     require_org_admin,
     require_org_member,
+    require_org_member_role,
     require_super_admin_dep,
 )
 from app.core.security import get_current_user
@@ -252,10 +253,10 @@ async def update_member_role(
     membership_id: str,
     body: UpdateMemberRoleRequest,
     db: AsyncSession = Depends(get_db),
-    _org_ctx: tuple = Depends(require_org_admin),
+    _org_ctx: tuple = Depends(require_org_member_role("operator")),
 ):
-    """修改成员角色（组织管理员+）。"""
-    data = await org_service.update_member_role(org_id, membership_id, body.role, db)
+    """修改成员角色（组织操作者+；operator 不能把任何人设为 admin，见 org_service.update_member_role）。"""
+    data = await org_service.update_member_role(org_id, membership_id, body.role, db, actor=_org_ctx[0])
     await hooks.emit("operation_audit", action="org.member_role_updated", target_type="org_membership", target_id=membership_id, actor_id=_org_ctx[0].id, org_id=org_id)
     return ApiResponse(data=data)
 
@@ -265,9 +266,9 @@ async def remove_member(
     org_id: str,
     membership_id: str,
     db: AsyncSession = Depends(get_db),
-    _org_ctx: tuple = Depends(require_org_admin),
+    _org_ctx: tuple = Depends(require_org_member_role("operator")),
 ):
-    """移除成员（组织管理员+）。"""
+    """移除成员（组织操作者+）。"""
     ms = (await db.execute(
         select(OrgMembership).where(OrgMembership.id == membership_id, OrgMembership.deleted_at.is_(None))
     )).scalar_one_or_none()
@@ -290,9 +291,9 @@ async def reset_member_password(
     org_id: str,
     user_id: str,
     db: AsyncSession = Depends(get_db),
-    _org_ctx: tuple = Depends(require_org_admin),
+    _org_ctx: tuple = Depends(require_org_member_role("operator")),
 ):
-    """重置成员密码（组织管理员，仅限 member 角色）。"""
+    """重置成员密码（组织操作者+，仅限 member 角色）。"""
     from app.models.org_membership import OrgMembership
 
     current_user = _org_ctx[0]

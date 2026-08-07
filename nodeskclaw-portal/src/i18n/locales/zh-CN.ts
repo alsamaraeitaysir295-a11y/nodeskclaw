@@ -1891,6 +1891,7 @@ const zhCN = {
       cannot_reset_own_password: "不能重置自己的密码，请到设置页修改",
       cannot_reset_admin_password: "不能重置其他管理员的密码",
       member_not_found: "该用户不是当前组织的成员",
+      cannot_promote_to_admin: "操作者无权将成员设为管理员",
     },
     cluster: {
       id_required: "请先选择集群",
