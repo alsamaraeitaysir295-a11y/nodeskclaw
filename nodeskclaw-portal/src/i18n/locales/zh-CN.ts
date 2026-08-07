@@ -1048,6 +1048,8 @@ const zhCN = {
     me: "我",
     roleSuperAdmin: "超级管理员",
     roleAdmin: "管理员",
+    roleOperator: "操作者",
+    roleOperatorLocked: "操作者角色由平台管理，暂不支持在此修改",
     roleMember: "成员",
     updateRoleFailed: "修改角色失败",
     removeMemberTitle: "移除成员",

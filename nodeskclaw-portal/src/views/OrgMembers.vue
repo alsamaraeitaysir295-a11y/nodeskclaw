@@ -12,6 +12,7 @@ import {
   Search,
   Crown,
   Shield,
+  ShieldCheck,
   Trash2,
   X,
   KeyRound,
@@ -453,6 +454,13 @@ function goJoinOrganization() {
                   {{ t('orgMembers.roleAdmin') }}
                 </span>
                 <span
+                  v-else-if="member.role === 'operator'"
+                  class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/15 text-indigo-400"
+                >
+                  <ShieldCheck class="w-3 h-3" />
+                  {{ t('orgMembers.roleOperator') }}
+                </span>
+                <span
                   v-else
                   class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/10 text-blue-400"
                 >
@@ -466,7 +474,13 @@ function goJoinOrganization() {
 
           <!-- Actions (admin only, not self) -->
           <div v-if="isOrgAdmin && member.user_id !== authStore.user?.id" class="flex items-center gap-2">
+            <span
+              v-if="member.role === 'operator'"
+              class="px-2.5 py-1 text-xs rounded-md border border-border bg-card text-muted-foreground cursor-not-allowed"
+              :title="t('orgMembers.roleOperatorLocked')"
+            >{{ t('orgMembers.roleOperator') }}</span>
             <CustomSelect
+              v-else
               :model-value="member.role"
               :options="roleOptions"
               size="xs"

@@ -1048,6 +1048,8 @@ const enUS = {
     me: "Me",
     roleSuperAdmin: "Super Admin",
     roleAdmin: "Admin",
+    roleOperator: "Operator",
+    roleOperatorLocked: "Operator role is managed by the platform and cannot be changed here",
     roleMember: "Member",
     updateRoleFailed: "Failed to update role",
     removeMemberTitle: "Remove Member",
