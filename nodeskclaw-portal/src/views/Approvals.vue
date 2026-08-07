@@ -1,7 +1,8 @@
 <!--
   申请审核中心
   ---------------------------------
-  - 顶级路由 /approvals，仅超管 / 任意组织 admin 可见（守卫在 router/index.ts）
+  - 顶级路由 /approvals，超管 / 达到 operator 等级的组织成员均可见（守卫在 router/index.ts）；
+    其中 joinRequests / leaveRequests 两个 Tab 需额外满足 multi_org 功能开启 且 操作者为组织 admin/超管
   - 当前 Tab：
     · skills（启用）：技能上传/加载审核，列表来自 GET /admin/genes/pending-review
     · joinRequests（启用，需 multi_org）：组织加入申请审核
@@ -23,7 +24,7 @@
       <p class="text-sm text-muted-foreground">{{ t('approvals.subtitle') }}</p>
     </div>
 
-    <!-- Tab 切换：skills 永久启用，joinRequests 仅 multi_org 启用时显示 -->
+    <!-- Tab 切换：skills 永久启用；joinRequests/leaveRequests 需同时满足 multi_org 功能开启 且 操作者是组织 admin/超管 -->
     <div class="flex gap-1 border-b border-border">
       <button
         v-for="tab in visibleTabs"
