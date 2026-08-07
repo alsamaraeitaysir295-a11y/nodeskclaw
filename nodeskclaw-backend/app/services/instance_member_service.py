@@ -10,7 +10,7 @@ from app.models.admin_membership import AdminMembership
 from app.models.base import not_deleted
 from app.models.instance import Instance
 from app.models.instance_member import INSTANCE_ROLE_LEVEL, InstanceMember, InstanceRole
-from app.models.org_membership import OrgMembership, OrgRole
+from app.models.org_membership import ADMIN_ROLE_LEVEL, OrgMembership, OrgRole
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -27,17 +27,34 @@ async def _get_org_role(user_id: str, org_id: str, db: AsyncSession) -> str | No
     return result.scalar_one_or_none()
 
 
+def map_org_role_to_instance_role(org_role: str | None) -> str | None:
+    """组织角色 -> 实例角色档位映射：member->viewer, operator->editor, admin->admin。
+
+    按 ADMIN_ROLE_LEVEL（app/models/org_membership.py）等级换算，复用同一套
+    组织角色等级常量，避免再造一份平行的等级判断逻辑。
+    非组织成员（org_role is None）返回 None。
+    """
+    if org_role is None:
+        return None
+    level = ADMIN_ROLE_LEVEL.get(org_role, 0)
+    if level >= ADMIN_ROLE_LEVEL[OrgRole.admin]:
+        return InstanceRole.admin
+    if level >= ADMIN_ROLE_LEVEL[OrgRole.operator]:
+        return InstanceRole.editor
+    return InstanceRole.viewer
+
+
 async def check_instance_access(
     instance_id: str,
     user: User,
     min_role: InstanceRole,
     db: AsyncSession,
-) -> InstanceMember | None:
+) -> None:
     """Check that *user* has at least *min_role* on the instance.
 
-    viewer/user 级别（< editor）：同 org 任意成员均可通过。
-    editor/admin 级别（>= editor）：仅创建者或 org_admin 可通过。
-    返回 None 表示通过（无需成员记录），抛出 ForbiddenError / NotFoundError 表示拒绝。
+    纯组织三级角色驱动：member->viewer、operator->editor、admin->admin，
+    不再看创建者身份，也不再查 InstanceMember 角色字段。
+    返回 None 表示通过，抛出 ForbiddenError / NotFoundError 表示拒绝。
     """
     instance = (await db.execute(
         select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
@@ -45,21 +62,17 @@ async def check_instance_access(
     if not instance:
         raise NotFoundError("实例不存在", "errors.instance.not_found")
 
-    if instance.org_id:
-        org_role = await _get_org_role(user.id, instance.org_id, db)
+    if not instance.org_id:
+        raise ForbiddenError("您没有该实例的访问权限", "errors.instance.no_access")
 
-        # 查看/使用级别：同 org 成员均可
-        if INSTANCE_ROLE_LEVEL[min_role] < INSTANCE_ROLE_LEVEL[InstanceRole.editor]:
-            if org_role is not None:
-                return None
-            raise ForbiddenError("您没有该实例的访问权限", "errors.instance.no_access")
+    org_role = await _get_org_role(user.id, instance.org_id, db)
+    if org_role is None:
+        raise ForbiddenError("您没有该实例的访问权限", "errors.instance.no_access")
 
-        # 配置修改级别：仅创建者或 org_admin
-        if org_role == OrgRole.admin or instance.created_by == user.id:
-            return None
-        raise ForbiddenError("仅创建者或管理员可修改配置", "errors.instance.creator_required")
-
-    raise ForbiddenError("您没有该实例的访问权限", "errors.instance.no_access")
+    effective_role = map_org_role_to_instance_role(org_role)
+    if INSTANCE_ROLE_LEVEL[effective_role] < INSTANCE_ROLE_LEVEL[min_role]:
+        raise ForbiddenError("权限不足", "errors.instance.insufficient_permission")
+    return None
 
 
 async def get_user_instance_role(
@@ -67,22 +80,16 @@ async def get_user_instance_role(
 ) -> str | None:
     """Return the effective role string for user on instance, or None.
 
-    创建者或 org_admin → admin；同 org 普通成员 → viewer；非成员 → None。
+    组织 member -> viewer；组织 operator -> editor；组织 admin -> admin；非成员 -> None。
     """
     instance = (await db.execute(
         select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
     )).scalar_one_or_none()
-    if not instance:
+    if not instance or not instance.org_id:
         return None
 
-    if instance.org_id:
-        org_role = await _get_org_role(user.id, instance.org_id, db)
-        if org_role == OrgRole.admin or instance.created_by == user.id:
-            return InstanceRole.admin
-        if org_role is not None:
-            return InstanceRole.viewer
-
-    return None
+    org_role = await _get_org_role(user.id, instance.org_id, db)
+    return map_org_role_to_instance_role(org_role)
 
 
 def apply_accessible_filter(query, user_id: str, org_id: str | None, db: AsyncSession):

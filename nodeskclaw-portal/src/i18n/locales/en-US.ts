@@ -1929,6 +1929,7 @@ const enUS = {
     },
     instance: {
       not_found: "Instance not found",
+      insufficient_permission: "Insufficient permission",
       slug_conflict: "Instance slug already exists. Please choose another one",
       in_transitional_state: "Instance is in a transitional state, please wait for the current operation to complete",
     },

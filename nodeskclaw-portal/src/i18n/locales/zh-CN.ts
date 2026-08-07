@@ -1935,6 +1935,7 @@ const zhCN = {
       not_found: "实例不存在",
       no_access: "您没有该实例的访问权限",
       creator_required: "仅创建者或管理员可修改配置",
+      insufficient_permission: "权限不足",
       slug_conflict: "实例标识已存在，请更换标识",
       in_transitional_state: "实例正在执行其他操作，请等待完成后再试",
     },

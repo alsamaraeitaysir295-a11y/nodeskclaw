@@ -54,17 +54,7 @@ async def list_instances(
 ):
     effective_org_id = current_user.current_org_id
 
-    query = (
-        select(Instance, InstanceMember.role)
-        .outerjoin(
-            InstanceMember,
-            (InstanceMember.instance_id == Instance.id)
-            & (InstanceMember.user_id == current_user.id)
-            & (InstanceMember.deleted_at.is_(None)),
-        )
-        .where(not_deleted(Instance))
-        .order_by(Instance.created_at.desc())
-    )
+    query = select(Instance).where(not_deleted(Instance)).order_by(Instance.created_at.desc())
     if cluster_id:
         query = query.where(Instance.cluster_id == cluster_id)
     if effective_org_id:
@@ -81,20 +71,15 @@ async def list_instances(
     health_corrected = False
 
     items = []
-    for inst, member_role in result.all():
+    for (inst,) in result.all():
         if inst.status == "running" and inst.health_status != "healthy" and inst.id in connected:
             inst.health_status = "healthy"
             health_corrected = True
         info = InstanceInfo.model_validate(inst)
-        is_creator = inst.created_by == current_user.id
-        is_admin = await _is_org_admin(current_user.id, inst.org_id, db)
-        if is_creator or is_admin:
-            info.my_role = InstanceRole.admin
-        elif member_role:
-            info.my_role = member_role
-        else:
-            # 同 org 普通成员：可查看/使用，无配置权限
-            info.my_role = InstanceRole.viewer if inst.org_id else None
+        # 纯组织三级角色驱动：不再区分创建者/InstanceMember 角色记录，
+        # 与 instance_member_service.get_user_instance_role 共用同一份映射
+        org_role = await instance_member_service._get_org_role(current_user.id, inst.org_id, db) if inst.org_id else None
+        info.my_role = instance_member_service.map_org_role_to_instance_role(org_role)
         items.append(info)
 
     if health_corrected:
@@ -104,13 +89,6 @@ async def list_instances(
             logger.debug("列表 tunnel 健康修正持久化失败（非致命）")
 
     return ApiResponse(data=items)
-
-
-async def _is_org_admin(user_id: str, org_id: str | None, db: AsyncSession) -> bool:
-    if not org_id:
-        return False
-    role = await instance_member_service._get_org_role(user_id, org_id, db)
-    return role == "admin"
 
 
 @router.get("/{instance_id}", response_model=ApiResponse[InstanceDetail])
