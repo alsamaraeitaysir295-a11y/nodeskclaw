@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_db, require_org_admin
+from app.core.deps import get_db, require_org_admin, require_org_member_role
 from app.schemas.common import ApiResponse
 from app.schemas.skill import KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeBaseUpdate
 from app.services import kb_service, ragflow_adapter
@@ -16,7 +16,7 @@ router = APIRouter()
 async def create_kb(
     body: KnowledgeBaseCreate,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("operator")),
 ):
     user, org = auth
     kb = await kb_service.create_knowledge_base(
@@ -34,7 +34,7 @@ async def create_kb(
 @router.get("", response_model=ApiResponse[list[KnowledgeBaseResponse]])
 async def list_kbs(
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("member")),
 ):
     user, org = auth
     kbs = await kb_service.list_knowledge_bases(org_id=org.id, db=db)
@@ -46,7 +46,7 @@ async def update_kb(
     kb_id: str,
     body: KnowledgeBaseUpdate,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("operator")),
 ):
     user, org = auth
     updates = body.model_dump(exclude_none=True)
@@ -71,7 +71,7 @@ async def delete_kb(
 async def sync_kb(
     kb_id: str,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("operator")),
 ):
     user, org = auth
     kb = await kb_service.get_knowledge_base(kb_id=kb_id, org_id=org.id, db=db)
@@ -92,7 +92,7 @@ async def list_kb_documents(
     page: int = 1,
     page_size: int = 30,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_admin),
+    auth=Depends(require_org_member_role("member")),
 ):
     """预览知识库文档列表，代理 RAGFlow API 避免前端直接持有 API Key。"""
     user, org = auth
