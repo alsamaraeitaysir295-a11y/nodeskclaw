@@ -3,13 +3,16 @@ import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useOrgStore } from '@/stores/org'
+import { useAuthStore } from '@/stores/auth'
 import { useFeature } from '@/composables/useFeature'
+import { hasOrgRoleLevel, type OrgRoleName } from '@/utils/orgRole'
 import { Settings, Users, Dna, FolderOpen, Mail, Server, Building2, Container, ScrollText, Globe, Cpu, Layers, KeyRound, BarChart3 } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const orgStore = useOrgStore()
+const authStore = useAuthStore()
 
 interface NavItem {
   name: string
@@ -17,31 +20,35 @@ interface NavItem {
   icon: typeof Settings
   matchPrefix?: string
   feature?: string  // 关联的 feature_id；未启用时该 Tab 不展示
+  minRole: OrgRoleName  // 最低组织角色门槛，驱动侧边栏是否展示该子页面
 }
 
 // 组织设置侧边栏导航项；EE/CE 现已共享同一份菜单（集群/Registry/SMTP 等不再 CE 独占）
+// minRole：member 可见的仅组织信息/人类成员/LLM用量分析三页，其余均需 operator+
 const allNavItems: NavItem[] = [
-  { name: 'OrgInfo', label: () => t('orgSettings.orgInfo'), icon: Building2 },
-  { name: 'OrgSettingsClusters', label: () => t('orgSettings.clusters'), icon: Server },
-  { name: 'OrgSettingsRegistry', label: () => t('orgSettings.registryTitle'), icon: Container },
-  { name: 'OrgSettingsEngineVersions', label: () => t('orgSettings.engineVersionsTab'), icon: Layers },
-  { name: 'OrgSettingsSpecs', label: () => t('orgSettings.specsTab'), icon: Cpu },
-  { name: 'OrgMembers', label: () => t('orgSettings.humanMembers'), icon: Users },
-  { name: 'OrgSettingsLlmKeys', label: () => t('orgSettings.llmKeysTab'), icon: KeyRound },
-  { name: 'OrgSettingsLlmAnalytics', label: () => t('orgSettings.llmAnalyticsTab'), icon: BarChart3, feature: 'llm_analytics' },
-  { name: 'OrgSettingsGenes', label: () => t('orgSettings.requiredGenesTab'), icon: Dna },
-  { name: 'OrgSettingsSmtp', label: () => t('orgSettings.smtpTitle'), icon: Mail },
-  { name: 'OrgSettingsNetwork', label: () => t('orgSettings.networkTab'), icon: Globe },
-  { name: 'OrgEnterpriseFiles', label: () => t('enterpriseFiles.title'), icon: FolderOpen, matchPrefix: '/org-settings/files' },
-  { name: 'OrgSettingsAudit', label: () => t('auditLogs.title'), icon: ScrollText },
+  { name: 'OrgInfo', label: () => t('orgSettings.orgInfo'), icon: Building2, minRole: 'member' },
+  { name: 'OrgSettingsClusters', label: () => t('orgSettings.clusters'), icon: Server, minRole: 'operator' },
+  { name: 'OrgSettingsRegistry', label: () => t('orgSettings.registryTitle'), icon: Container, minRole: 'operator' },
+  { name: 'OrgSettingsEngineVersions', label: () => t('orgSettings.engineVersionsTab'), icon: Layers, minRole: 'operator' },
+  { name: 'OrgSettingsSpecs', label: () => t('orgSettings.specsTab'), icon: Cpu, minRole: 'operator' },
+  { name: 'OrgMembers', label: () => t('orgSettings.humanMembers'), icon: Users, minRole: 'member' },
+  { name: 'OrgSettingsLlmKeys', label: () => t('orgSettings.llmKeysTab'), icon: KeyRound, minRole: 'operator' },
+  { name: 'OrgSettingsLlmAnalytics', label: () => t('orgSettings.llmAnalyticsTab'), icon: BarChart3, feature: 'llm_analytics', minRole: 'member' },
+  { name: 'OrgSettingsGenes', label: () => t('orgSettings.requiredGenesTab'), icon: Dna, minRole: 'operator' },
+  { name: 'OrgSettingsSmtp', label: () => t('orgSettings.smtpTitle'), icon: Mail, minRole: 'operator' },
+  { name: 'OrgSettingsNetwork', label: () => t('orgSettings.networkTab'), icon: Globe, minRole: 'operator' },
+  { name: 'OrgEnterpriseFiles', label: () => t('enterpriseFiles.title'), icon: FolderOpen, matchPrefix: '/org-settings/files', minRole: 'operator' },
+  { name: 'OrgSettingsAudit', label: () => t('auditLogs.title'), icon: ScrollText, minRole: 'operator' },
 ]
 
 // 先按"路由是否真实存在"过滤（避免渲染 EE 端未注册的路由，如 OrgEnterpriseFiles），
-// 再按关联 feature 是否启用过滤（避免未开通该 feature 的组织点进去被路由守卫重定向）
+// 再按关联 feature 是否启用过滤（避免未开通该 feature 的组织点进去被路由守卫重定向），
+// 最后按组织角色等级过滤（超管不受角色限制，直接放行）
 const navItems = computed(() =>
   allNavItems.filter(item =>
     router.hasRoute(item.name) &&
-    (!item.feature || useFeature(item.feature).isEnabled.value)
+    (!item.feature || useFeature(item.feature).isEnabled.value) &&
+    (authStore.user?.is_super_admin || hasOrgRoleLevel(authStore.user?.portal_org_role, item.minRole))
   )
 )
 
