@@ -1,6 +1,5 @@
 """Shared test fixtures."""
 
-import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -17,12 +16,13 @@ TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:543
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+# 注：pytest-asyncio 1.x 不再支持通过覆盖 event_loop fixture 来自定义事件循环
+# （旧写法在 1.x 下会被忽略，导致每个测试函数拿到不同的事件循环，
+# 而 engine 是模块级单例，其 asyncpg 连接池绑定在首次使用时的事件循环上，
+# 从而在第二个测试起报 InterfaceError / 跨事件循环 Future 错误）。
+# 改为在 pyproject.toml 的 [tool.pytest.ini_options] 中设置
+# asyncio_default_fixture_loop_scope = "session"，让整个会话共用同一个
+# 事件循环，与本模块级 engine 单例的生命周期保持一致。
 
 
 @pytest.fixture(autouse=True)

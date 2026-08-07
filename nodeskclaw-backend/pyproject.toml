@@ -51,4 +51,11 @@ ignore = ["E501", "UP017", "I001", "UP042", "F401", "F841", "E702", "UP035", "UP
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# pytest-asyncio 1.x 起，覆盖 event_loop fixture 的旧写法失效；
+# 需要同时声明 fixture 级和测试级事件循环作用域为 session，
+# 使整个测试会话共用一个事件循环，与 tests/conftest.py 中模块级单例
+# engine（asyncpg 连接池）绑定的事件循环保持一致，
+# 避免"另一操作正在进行"/跨事件循环 Future 错误
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
