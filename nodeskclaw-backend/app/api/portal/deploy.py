@@ -12,7 +12,7 @@ from fastapi import status as http_status
 from sqlalchemy import select
 
 from app.core import hooks
-from app.core.deps import get_db
+from app.core.deps import get_db, require_org_member_role
 from app.core.exceptions import BadRequestError, ConflictError
 from app.core.security import get_current_user
 from app.models.org_membership import OrgMembership
@@ -42,6 +42,10 @@ async def deploy(
     body: DeployRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    # 创建实例门槛提升到 operator 及以上（member 只读，不能自建实例）；
+    # is_super_admin 会在 require_org_member_role 内部自动豁免，不影响下方既有的
+    # org_id 显式校验逻辑
+    _role_check: tuple = Depends(require_org_member_role("operator")),
 ):
     if not current_user.is_super_admin:
         org_id_check = body.org_id or current_user.current_org_id
