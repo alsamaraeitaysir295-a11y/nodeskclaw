@@ -15,7 +15,7 @@ from sqlalchemy import func, select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import hooks
-from app.core.deps import async_session_factory, get_current_org, get_db
+from app.core.deps import async_session_factory, get_current_org, get_db, require_org_member_role
 from app.models.instance import Instance
 from app.models.workspace_agent import WorkspaceAgent
 from app.schemas.common import PaginatedResponse, Pagination
@@ -102,7 +102,8 @@ async def _require_collaboration_workspace_access(
 @router.post("")
 async def create_workspace(
     data: WorkspaceCreate,
-    org_ctx=Depends(get_current_org),
+    # 创建工作区门槛提升到 operator 及以上（member 不再能建组）
+    org_ctx=Depends(require_org_member_role("operator")),
     db: AsyncSession = Depends(get_db),
 ):
     user, org = org_ctx
