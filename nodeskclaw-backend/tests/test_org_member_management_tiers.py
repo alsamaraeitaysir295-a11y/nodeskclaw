@@ -12,6 +12,7 @@ from app.models.organization import Organization
 from app.models.rbac.role import Role
 from app.models.rbac.subject_role import SubjectRole
 from app.models.user import User
+from app.services.rbac_sync import grant_role
 from app.startup.seed_rbac import seed_rbac
 from tests.conftest import TestSessionLocal
 
@@ -157,6 +158,33 @@ async def test_operator_can_remove_member(client: AsyncClient):
         assert resp.status_code == 200
     finally:
         _clear_override()
+
+
+@pytest.mark.asyncio
+async def test_remove_member_revokes_rbac_subject_role(client: AsyncClient):
+    """回归：remove_member 软删成员后 subject_roles 必须同步撤销，不能残留旧角色（RBAC 双写缺口）。"""
+    await seed_rbac(TestSessionLocal)
+    org, actor, target, membership = await _make_org_with_two_members(OrgRole.operator)
+    # _make_org_with_two_members 直接插 OrgMembership，不经过 add_member，
+    # 这里手动 grant 一次模拟正常入组流程留下的 subject_roles 记录，
+    # 否则测不出"移除后未撤销"这个缺口（本来就没有记录，删不删都是 None）
+    async with TestSessionLocal() as db:
+        await grant_role(
+            db, subject_type="user", subject_id=target.id,
+            role_key="org_member", scope_type="org", scope_id=org.id,
+            granted_reason="test_setup",
+        )
+        await db.commit()
+    assert await _active_subject_role_key(target.id, org.id) == "org_member"
+
+    _override_user(actor)
+    try:
+        resp = await client.delete(f"/api/v1/orgs/{org.id}/members/{membership.id}")
+        assert resp.status_code == 200
+    finally:
+        _clear_override()
+
+    assert await _active_subject_role_key(target.id, org.id) is None
 
 
 @pytest.mark.asyncio

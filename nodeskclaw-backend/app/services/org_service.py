@@ -354,6 +354,13 @@ async def remove_member(org_id: str, membership_id: str, db: AsyncSession) -> No
         raise ForbiddenError("组织至少需要一个管理员")
 
     membership.soft_delete()
+    # RBAC 双写缺口修复：此前软删 legacy 的 OrgMembership 后从未同步撤销
+    # subject_roles，导致成员被移除后 RBAC 路径仍能查到其旧角色授权。
+    # revoke_role 幂等，找不到对应记录时静默跳过。
+    await revoke_role(
+        db, subject_type="user", subject_id=membership.user_id,
+        role_key=f"org_{membership.role}", scope_type="org", scope_id=org_id,
+    )
     await db.commit()
 
 
