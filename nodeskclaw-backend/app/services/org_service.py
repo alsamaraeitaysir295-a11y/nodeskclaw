@@ -290,6 +290,19 @@ async def update_member_role(
         raise NotFoundError("成员记录不存在")
 
     membership, user = row
+
+    # 若目标成员当前是 admin 且即将被降级为非 admin，需确保组织不会因此降到零 admin
+    if membership.role == OrgRole.admin and role != OrgRole.admin:
+        admin_count = await db.execute(
+            select(func.count()).where(
+                OrgMembership.org_id == org_id,
+                OrgMembership.role == OrgRole.admin,
+                not_deleted(OrgMembership),
+            )
+        )
+        if admin_count.scalar_one() <= 1:
+            raise ForbiddenError("组织至少需要一个管理员")
+
     membership.role = role
     await db.commit()
 
