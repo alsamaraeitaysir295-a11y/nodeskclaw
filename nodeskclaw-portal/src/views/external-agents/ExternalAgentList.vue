@@ -5,6 +5,7 @@ import { Bot, Plus, RefreshCw, CheckCircle2, XCircle, Circle, MessageSquare, Pen
 import { useExternalAgentStore } from '@/stores/externalAgents'
 import { externalAgentApi, type ExternalAgent } from '@/services/externalAgents'
 import { useAuthStore } from '@/stores/auth'
+import { hasOrgRoleLevel } from '@/utils/orgRole'
 
 const router = useRouter()
 const store = useExternalAgentStore()
@@ -13,8 +14,11 @@ const authStore = useAuthStore()
 const syncing = ref<string | null>(null)
 const deleting = ref<string | null>(null)
 
-// org admin 才能看到管理操作
-const isAdmin = computed(
+// org operator+ 可创建/编辑/同步；delete 保持 org admin 专属
+const canManage = computed(
+  () => hasOrgRoleLevel(authStore.user?.portal_org_role, 'operator') || authStore.user?.is_super_admin,
+)
+const canDelete = computed(
   () => authStore.user?.portal_org_role === 'admin' || authStore.user?.is_super_admin,
 )
 
@@ -69,7 +73,7 @@ function formatTime(ts: string | null) {
         <span class="text-xs text-muted-foreground">运行在外部服务器上的专用 AI Agent</span>
       </div>
       <button
-        v-if="isAdmin"
+        v-if="canManage"
         class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
         @click="router.push('/org-settings/external-agents/new')"
       >
@@ -94,7 +98,7 @@ function formatTime(ts: string | null) {
         由管理员添加运行在外部服务器的专用 AI Agent，连接后即可在此发起对话
       </p>
       <button
-        v-if="isAdmin"
+        v-if="canManage"
         class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
         @click="router.push('/org-settings/external-agents/new')"
       >
@@ -176,7 +180,7 @@ function formatTime(ts: string | null) {
             发起对话
           </button>
           <button
-            v-if="isAdmin"
+            v-if="canManage"
             class="inline-flex items-center justify-center gap-1 rounded-lg border border-border text-muted-foreground px-3 py-1.5 text-xs hover:text-primary hover:border-primary/50 hover:bg-primary/5"
             @click="router.push(`/org-settings/external-agents/${agent.id}/edit`)"
           >
@@ -184,7 +188,7 @@ function formatTime(ts: string | null) {
             编辑
           </button>
           <button
-            v-if="isAdmin"
+            v-if="canManage"
             class="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 disabled:opacity-40"
             :disabled="syncing === agent.id"
             title="验证连接"
@@ -193,7 +197,7 @@ function formatTime(ts: string | null) {
             <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': syncing === agent.id }" />
           </button>
           <button
-            v-if="isAdmin"
+            v-if="canDelete"
             class="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40"
             :disabled="deleting === agent.id"
             @click="remove(agent)"
