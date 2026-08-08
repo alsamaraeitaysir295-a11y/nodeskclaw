@@ -47,7 +47,15 @@ const toast = useToast()
 const { confirm } = useConfirm()
 
 const workspaceId = computed(() => props.workspaceId)
-const canManageMembers = computed(() => store.hasPermission('manage_members'))
+// 工作区级别成员权限编辑器已废弃：后端 check_workspace_access（组织角色权限矩阵改造）现在纯粹
+// 按组织角色判定访问权限，WorkspaceMember.permissions/is_admin 字段不再被任何鉴权逻辑读取，继续
+// 暴露"添加成员/编辑权限/移除成员"入口会让管理员误以为限制了访问、实际完全没有限制。
+// 故恒定隐藏该入口（下方模板中 v-if="canManageMembers" 同时控制了添加成员按钮、每行的编辑/移除
+// 按钮，其余"编辑权限对话框""添加成员对话框"均只能通过这些按钮触发，因此一并被间接隐藏），
+// 仅保留成员列表的只读展示。原实现保留在下方注释，供未来若需要恢复工作区级别细粒度权限时参考。
+// 详见 .superpowers/sdd/2026-08-07-org-role-permission-matrix/final-fix-report.md 修复 B 小节。
+const canManageMembers = computed(() => false)
+// const canManageMembers = computed(() => store.hasPermission('manage_members'))
 const canManageSettings = computed(() => store.hasPermission('manage_settings'))
 const canDeleteWorkspace = computed(() => store.hasPermission('delete_workspace'))
 
