@@ -1,4 +1,4 @@
-"""验证 create_automation_task 补充的组织归属校验（堵跨组织越权漏洞，非角色提权）。
+"""验证 create_automation_task / update_automation_task 的组织归属校验（堵跨组织越权漏洞，非角色提权）。
 
 注：brief 原始样例代码里的 Instance(...) 构造只给了 org_id/name/created_by/runtime/status，
 但 Instance.cluster_id/namespace/image_version 是 NOT NULL 字段（见 app/models/instance.py），
@@ -12,6 +12,7 @@ from httpx import AsyncClient
 
 from app.core.security import get_current_user
 from app.main import app
+from app.models.automation_task import AutomationTask
 from app.models.cluster import Cluster
 from app.models.instance import Instance
 from app.models.org_membership import OrgMembership, OrgRole
@@ -121,5 +122,143 @@ async def test_can_create_automation_task_for_own_org_instance(client: AsyncClie
             json={"instance_id": instance.id, "name": "同组织任务", "prompt": "test"},
         )
         assert resp.status_code == 200, resp.text
+    finally:
+        _clear_override()
+
+
+@pytest.mark.asyncio
+async def test_cannot_reassign_automation_task_to_other_org_instance(client: AsyncClient):
+    """update_automation_task 不能把已有任务的 instance_id 改指向别的组织的实例。"""
+    suffix = uuid.uuid4().hex[:8]
+    async with TestSessionLocal() as db:
+        org_a = Organization(name=f"org-a2-{suffix}", slug=f"org-a2-{suffix}")
+        org_b = Organization(name=f"org-b2-{suffix}", slug=f"org-b2-{suffix}")
+        db.add_all([org_a, org_b])
+        await db.flush()
+        user_a = User(
+            email=f"user-a2-{suffix}@example.com", name="user-a2",
+            password_hash="x", current_org_id=org_a.id,
+        )
+        db.add(user_a)
+        await db.flush()
+        db.add(OrgMembership(org_id=org_a.id, user_id=user_a.id, role=OrgRole.member))
+        other_user = User(
+            email=f"other-user-a2-{suffix}@example.com", name="other-user-a2",
+            password_hash="x",
+        )
+        db.add(other_user)
+        await db.flush()
+
+        cluster_a = Cluster(name=f"cluster-a2-{suffix}", org_id=org_a.id, created_by=other_user.id)
+        cluster_b = Cluster(name=f"cluster-b2-{suffix}", org_id=org_b.id, created_by=other_user.id)
+        db.add_all([cluster_a, cluster_b])
+        await db.flush()
+
+        # 任务原本指向 org_a 自己的实例
+        instance_a = Instance(
+            org_id=org_a.id, name=f"inst-a2-{suffix}", slug=f"inst-a2-{suffix}",
+            cluster_id=cluster_a.id, namespace="default", image_version="latest",
+            created_by=other_user.id,
+            runtime="openclaw", status="ready",
+        )
+        # 尝试改指向的目标实例属于 org_b
+        instance_b = Instance(
+            org_id=org_b.id, name=f"inst-b2-{suffix}", slug=f"inst-b2-{suffix}",
+            cluster_id=cluster_b.id, namespace="default", image_version="latest",
+            created_by=other_user.id,
+            runtime="openclaw", status="ready",
+        )
+        db.add_all([instance_a, instance_b])
+        await db.flush()
+
+        task = AutomationTask(
+            user_id=user_a.id, instance_id=instance_a.id,
+            name="待越权任务", prompt="test", frequency="daily", status="active",
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(user_a)
+        await db.refresh(instance_a)
+        await db.refresh(instance_b)
+        await db.refresh(task)
+
+    _override_user(user_a)
+    try:
+        resp = await client.patch(
+            f"/api/v1/automation-tasks/{task.id}",
+            json={"instance_id": instance_b.id},
+        )
+        assert resp.status_code == 403, resp.text
+
+        # 确认拒绝后任务的 instance_id 未被篡改（DB 层面校验，而不只是响应状态码）
+        async with TestSessionLocal() as db:
+            result = await db.execute(
+                AutomationTask.__table__.select().where(AutomationTask.id == task.id)
+            )
+            row = result.first()
+            assert row.instance_id == instance_a.id
+    finally:
+        _clear_override()
+
+
+@pytest.mark.asyncio
+async def test_can_reassign_automation_task_to_own_org_instance(client: AsyncClient):
+    """确认修复没有误伤合法请求：同组织内改绑实例仍然正常。"""
+    suffix = uuid.uuid4().hex[:8]
+    async with TestSessionLocal() as db:
+        org = Organization(name=f"org-own2-{suffix}", slug=f"org-own2-{suffix}")
+        db.add(org)
+        await db.flush()
+        user = User(
+            email=f"user-own2-{suffix}@example.com", name="user-own2",
+            password_hash="x", current_org_id=org.id,
+        )
+        db.add(user)
+        await db.flush()
+        db.add(OrgMembership(org_id=org.id, user_id=user.id, role=OrgRole.member))
+        other_user = User(
+            email=f"other-user-own2-{suffix}@example.com", name="other-user-own2",
+            password_hash="x",
+        )
+        db.add(other_user)
+        await db.flush()
+
+        cluster = Cluster(name=f"cluster-own2-{suffix}", org_id=org.id, created_by=other_user.id)
+        db.add(cluster)
+        await db.flush()
+
+        instance_1 = Instance(
+            org_id=org.id, name=f"inst-own2-1-{suffix}", slug=f"inst-own2-1-{suffix}",
+            cluster_id=cluster.id, namespace="default", image_version="latest",
+            created_by=other_user.id,
+            runtime="openclaw", status="ready",
+        )
+        instance_2 = Instance(
+            org_id=org.id, name=f"inst-own2-2-{suffix}", slug=f"inst-own2-2-{suffix}",
+            cluster_id=cluster.id, namespace="default", image_version="latest",
+            created_by=other_user.id,
+            runtime="openclaw", status="ready",
+        )
+        db.add_all([instance_1, instance_2])
+        await db.flush()
+
+        task = AutomationTask(
+            user_id=user.id, instance_id=instance_1.id,
+            name="同组织改绑任务", prompt="test", frequency="daily", status="active",
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(user)
+        await db.refresh(instance_2)
+        await db.refresh(task)
+
+    _override_user(user)
+    try:
+        resp = await client.patch(
+            f"/api/v1/automation-tasks/{task.id}",
+            json={"instance_id": instance_2.id},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["instance_id"] == instance_2.id
     finally:
         _clear_override()

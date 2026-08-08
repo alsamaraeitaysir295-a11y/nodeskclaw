@@ -214,6 +214,20 @@ async def update_automation_task(
         if not instance:
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="AI 员工不存在")
+
+        # 补充组织归属校验：与 create_automation_task 一致，堵住"把任务的 instance_id
+        # 改指向别的组织的实例"这一跨组织越权漏洞
+        if instance.org_id != current_user.current_org_id:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error_code": 40312,
+                    "message_key": "errors.org.org_member_required",
+                    "message": "您不是该实例所属组织的成员",
+                },
+            )
+
         task.instance_id = body.instance_id
         instance_name = instance.name
     else:
