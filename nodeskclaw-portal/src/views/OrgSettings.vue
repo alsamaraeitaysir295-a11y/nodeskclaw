@@ -24,7 +24,9 @@ interface NavItem {
 }
 
 // 组织设置侧边栏导航项；EE/CE 现已共享同一份菜单（集群/Registry/SMTP 等不再 CE 独占）
-// minRole：member 可见的仅组织信息/人类成员/LLM用量分析三页，其余均需 operator+
+// minRole：member 可见的仅组织信息/人类成员两页，operator 及以上还能看到集群/Registry 等运营类页面，
+// 操作审计（`/{org_id}/audit-logs`）与 LLM 用量分析（`/orgs/{org_id}/token-analytics`）后端接口都是
+// require_org_admin，operator 打开会全程 403，故这两页门槛设为 admin，与后端实际权限对齐
 const allNavItems: NavItem[] = [
   { name: 'OrgInfo', label: () => t('orgSettings.orgInfo'), icon: Building2, minRole: 'member' },
   { name: 'OrgSettingsClusters', label: () => t('orgSettings.clusters'), icon: Server, minRole: 'operator' },
@@ -33,12 +35,12 @@ const allNavItems: NavItem[] = [
   { name: 'OrgSettingsSpecs', label: () => t('orgSettings.specsTab'), icon: Cpu, minRole: 'operator' },
   { name: 'OrgMembers', label: () => t('orgSettings.humanMembers'), icon: Users, minRole: 'member' },
   { name: 'OrgSettingsLlmKeys', label: () => t('orgSettings.llmKeysTab'), icon: KeyRound, minRole: 'operator' },
-  { name: 'OrgSettingsLlmAnalytics', label: () => t('orgSettings.llmAnalyticsTab'), icon: BarChart3, feature: 'llm_analytics', minRole: 'member' },
+  { name: 'OrgSettingsLlmAnalytics', label: () => t('orgSettings.llmAnalyticsTab'), icon: BarChart3, feature: 'llm_analytics', minRole: 'admin' },
   { name: 'OrgSettingsGenes', label: () => t('orgSettings.requiredGenesTab'), icon: Dna, minRole: 'operator' },
   { name: 'OrgSettingsSmtp', label: () => t('orgSettings.smtpTitle'), icon: Mail, minRole: 'operator' },
   { name: 'OrgSettingsNetwork', label: () => t('orgSettings.networkTab'), icon: Globe, minRole: 'operator' },
   { name: 'OrgEnterpriseFiles', label: () => t('enterpriseFiles.title'), icon: FolderOpen, matchPrefix: '/org-settings/files', minRole: 'operator' },
-  { name: 'OrgSettingsAudit', label: () => t('auditLogs.title'), icon: ScrollText, minRole: 'operator' },
+  { name: 'OrgSettingsAudit', label: () => t('auditLogs.title'), icon: ScrollText, minRole: 'admin' },
 ]
 
 // 先按"路由是否真实存在"过滤（避免渲染 EE 端未注册的路由，如 OrgEnterpriseFiles），
