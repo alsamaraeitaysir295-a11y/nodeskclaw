@@ -303,7 +303,17 @@ async def update_member_role(
         if admin_count.scalar_one() <= 1:
             raise ForbiddenError("组织至少需要一个管理员")
 
+    old_role = membership.role
     membership.role = role
+    # RBAC 双写缺口修复：此前只更新 legacy 的 OrgMembership.role，从未同步 subject_roles，
+    # 导致走 RBAC 路径的权限判断（如未来新增能力）看到的还是旧角色。补 replace_role
+    # 保持与 create_org/_ensure_membership/add_member 一致的双写模式。
+    await replace_role(
+        db, subject_type="user", subject_id=membership.user_id,
+        old_role_key=f"org_{old_role}", new_role_key=f"org_{role}",
+        scope_type="org", scope_id=org_id,
+        granted_by=actor.id, granted_reason="update_member_role",
+    )
     await db.commit()
 
     return MemberInfo(
