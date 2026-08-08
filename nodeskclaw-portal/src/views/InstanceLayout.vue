@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Circle, Loader2, LayoutDashboard, Brain, Dna, History, Radio, FolderOpen, Users, Activity, Archive, Database } from 'lucide-vue-next'
+import { ArrowLeft, Circle, Loader2, LayoutDashboard, Brain, Dna, History, Radio, FolderOpen, Activity, Archive, Database } from 'lucide-vue-next'
 import api from '@/services/api'
 import { getRuntimeCaps } from '@/utils/runtimeCapabilities'
 import { getStatusDisplay } from '@/utils/instanceStatus'
@@ -63,11 +63,14 @@ const navItems = computed(() => {
   items.push({ name: 'InstanceChannels', label: t('common.channels'), icon: Radio })
   if (caps.value.llmConfig) items.push({ name: 'InstanceSettings', label: t('common.modelConfig'), icon: Brain })
   items.push({ name: 'InstanceKnowledgeBase', label: t('common.knowledgeBases'), icon: Database })
+  // 实例文件/备份维持现状：仍要求最高权限（admin），不做读写分级
   if (myInstanceRole.value === 'admin') {
     items.push({ name: 'InstanceFiles', label: t('common.files'), icon: FolderOpen })
     items.push({ name: 'InstanceBackups', label: t('backup.title'), icon: Archive })
-    items.push({ name: 'InstanceMembers', label: t('common.members'), icon: Users })
   }
+  // InstanceMembers 管理入口无条件隐藏：InstanceMember 角色字段已不再被任何鉴权
+  // 逻辑读取（纯组织角色驱动后成为摆设），继续展示会让管理员误以为设置了角色会生效。
+  // 组件本身不删除，数据表也不删除，仅隐藏导航入口，见设计文档"关键澄清"。
   return items
 })
 </script>
