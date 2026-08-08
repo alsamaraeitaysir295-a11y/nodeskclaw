@@ -72,9 +72,13 @@ const resetResultName = ref('')
 const resetResultPassword = ref('')
 const resetCopied = ref(false)
 
-const isOrgAdmin = computed(() => authStore.user?.portal_org_role === 'admin')
-// 用于"人类成员"页操作区（角色下拉/移除/重置密码）的可见性门槛，operator 及以上可管理成员
-const isOrgOperatorOrAbove = computed(() => hasOrgRoleLevel(authStore.user?.portal_org_role, 'operator'))
+const isOrgAdmin = computed(
+  () => authStore.user?.portal_org_role === 'admin' || authStore.user?.is_super_admin,
+)
+// 用于"人类成员"页操作区（角色下拉/移除/重置密码）的可见性门槛，operator 及以上可管理成员（超管短路）
+const isOrgOperatorOrAbove = computed(
+  () => hasOrgRoleLevel(authStore.user?.portal_org_role, 'operator') || authStore.user?.is_super_admin,
+)
 
 const roleOptions = computed(() =>
   roles.value.map(r => ({ value: r.id, label: t(r.name_key) }))
