@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { BookOpen, Plus, Trash2, Pencil, RefreshCw, CheckCircle2, XCircle, Circle } from 'lucide-vue-next'
 import { useSkillStore } from '@/stores/skills'
@@ -7,11 +7,22 @@ import { kbApi } from '@/services/skills'
 import type { KnowledgeBase } from '@/services/skills'
 import KbSyncStatus from '@/components/skills/KbSyncStatus.vue'
 import KnowledgeBasePreviewDrawer from '@/components/skills/KnowledgeBasePreviewDrawer.vue'
+import { useAuthStore } from '@/stores/auth'
+import { hasOrgRoleLevel } from '@/utils/orgRole'
 
 const router = useRouter()
 const skillStore = useSkillStore()
+const authStore = useAuthStore()
 const deleting = ref<string | null>(null)
 const syncing = ref<string | null>(null)
+
+// org operator+ 可新建/编辑/同步；delete 保持 org admin 专属
+const canManage = computed(
+  () => hasOrgRoleLevel(authStore.user?.portal_org_role, 'operator') || authStore.user?.is_super_admin,
+)
+const canDelete = computed(
+  () => authStore.user?.portal_org_role === 'admin' || authStore.user?.is_super_admin,
+)
 
 // 预览 drawer 状态
 const previewKb = ref<KnowledgeBase | null>(null)
@@ -55,6 +66,7 @@ function openPreview(kb: KnowledgeBase) {
         <h1 class="text-xl font-semibold text-foreground">知识库管理</h1>
       </div>
       <button
+        v-if="canManage"
         class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
         @click="router.push('/admin/knowledge-bases/new')"
       >
@@ -114,6 +126,7 @@ function openPreview(kb: KnowledgeBase) {
         <div class="flex items-center gap-2 ml-3 shrink-0">
           <!-- 连接验证按钮 -->
           <button
+            v-if="canManage"
             class="p-2 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 disabled:opacity-40"
             :disabled="syncing === kb.id"
             :title="'验证连接'"
@@ -122,12 +135,14 @@ function openPreview(kb: KnowledgeBase) {
             <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': syncing === kb.id }" />
           </button>
           <button
+            v-if="canManage"
             class="p-2 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10"
             @click.stop="router.push(`/admin/knowledge-bases/${kb.id}/edit`)"
           >
             <Pencil class="w-4 h-4" />
           </button>
           <button
+            v-if="canDelete"
             class="p-2 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40"
             :disabled="deleting === kb.id"
             @click.stop="remove(kb.id)"

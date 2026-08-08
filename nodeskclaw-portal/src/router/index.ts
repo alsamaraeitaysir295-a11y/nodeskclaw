@@ -148,13 +148,13 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/admin/knowledge-bases/new',
     name: 'AdminKnowledgeBaseNew',
     component: () => import('@/views/skills/admin/KnowledgeBaseFormView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requiredOrgRole: 'operator' },
   },
   {
     path: '/admin/knowledge-bases/:id/edit',
     name: 'AdminKnowledgeBaseEdit',
     component: () => import('@/views/skills/admin/KnowledgeBaseFormView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requiredOrgRole: 'operator' },
   },
   // 外部专用 Agent 模块
   {
