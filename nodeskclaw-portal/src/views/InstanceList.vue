@@ -11,6 +11,8 @@ import { useEdition } from '@/composables/useFeature'
 import BaseTooltip from '@/components/shared/BaseTooltip.vue'
 import InstanceCard from '@/components/instance/InstanceCard.vue'
 import type { TemplateInfo } from '@/stores/gene'
+import { useAuthStore } from '@/stores/auth'
+import { hasOrgRoleLevel } from '@/utils/orgRole'
 
 interface InstanceInfo {
   id: string
@@ -37,8 +39,13 @@ const { t } = useI18n()
 const geneStore = useGeneStore()
 const clusterStore = useClusterStore()
 const { isEE } = useEdition()
+const authStore = useAuthStore()
 
 const hasCluster = computed(() => clusterStore.clusters.length > 0)
+// 创建实例需要 operator 及以上组织角色（后端 portal/deploy.py 已有对应校验），超管短路放行
+const canCreate = computed(
+  () => hasOrgRoleLevel(authStore.user?.portal_org_role, 'operator') || authStore.user?.is_super_admin,
+)
 const loading = ref(true)
 const instances = ref<InstanceInfo[]>([])
 const error = ref('')
@@ -102,7 +109,7 @@ onMounted(() => {
           <RefreshCw class="w-4 h-4" />
           {{ t('instanceList.refresh') }}
         </button>
-        <BaseTooltip :text="!hasCluster ? t('instanceList.noClusterHint') : ''">
+        <BaseTooltip v-if="canCreate" :text="!hasCluster ? t('instanceList.noClusterHint') : ''">
           <button
             class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
             :disabled="!hasCluster"
@@ -224,6 +231,7 @@ onMounted(() => {
         {{ t('instanceList.emptyDescription') }}
       </p>
       <button
+        v-if="canCreate"
         class="mt-4 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         @click="router.push('/instances/create')"
       >

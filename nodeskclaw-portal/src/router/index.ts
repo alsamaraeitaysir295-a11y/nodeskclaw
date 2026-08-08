@@ -30,6 +30,7 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/workspace/create',
     name: 'CreateWorkspace',
     component: () => import('@/views/CreateWorkspace.vue'),
+    meta: { requiredOrgRole: 'operator' },
   },
   {
     path: '/workspace/:id',
@@ -50,6 +51,7 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/instances/create',
     name: 'CreateInstance',
     component: () => import('@/views/CreateInstance.vue'),
+    meta: { requiredOrgRole: 'operator' },
   },
   {
     path: '/instances/deploy/:deployId',

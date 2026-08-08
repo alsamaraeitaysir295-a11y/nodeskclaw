@@ -7,11 +7,18 @@ import { useI18n } from 'vue-i18n'
 import { useWorkspaceStore, type WorkspaceListItem } from '@/stores/workspace'
 import WorkspaceCard from '@/components/workspace/WorkspaceCard.vue'
 import DeployFromTemplateDialog from '@/components/workspace/DeployFromTemplateDialog.vue'
+import { useAuthStore } from '@/stores/auth'
+import { hasOrgRoleLevel } from '@/utils/orgRole'
 
 const router = useRouter()
 const store = useWorkspaceStore()
 const { activeTemplateDeploys } = storeToRefs(store)
 const { t } = useI18n()
+const authStore = useAuthStore()
+// 创建工作区需要 operator 及以上组织角色（后端 workspaces.py 已有对应校验），超管短路放行
+const canCreate = computed(
+  () => hasOrgRoleLevel(authStore.user?.portal_org_role, 'operator') || authStore.user?.is_super_admin,
+)
 
 const resumeDialogOpen = ref(false)
 const resumeDeployId = ref<string | null>(null)
@@ -77,6 +84,7 @@ function createNew() {
         <p class="text-sm text-muted-foreground mt-1">{{ t('workspaceList.subtitle') }}</p>
       </div>
       <button
+        v-if="canCreate"
         class="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
         @click="createNew"
       >
