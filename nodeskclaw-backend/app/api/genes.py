@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.deps import get_current_org, get_db, require_org_role
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.gene import Gene
 from app.models.user import User
@@ -267,6 +268,8 @@ async def upload_gene_folder(
         visibility=attrs["visibility"],
         review_status=attrs["review_status"],
     )
+    # target 已被限定为 personal，落库的 gene 没有 org 归属，org_id 传 None
+    await hooks.emit("operation_audit", action="gene.created", target_type="gene", target_id=gene_data["id"], actor_id=current_user.id, org_id=None, details={"name": meta["name"], "target": target})
     return ApiResponse(data=gene_data)
 
 
@@ -561,6 +564,7 @@ async def update_skill_content(
             raise NotFoundError(message=f"Skill '{skill_name}' 不存在")
         await fs.write_text(f"{skills_dir}/{skill_name}/SKILL.md", body.content)
 
+    await hooks.emit("operation_audit", action="skill.content_updated", target_type="skill", target_id=f"{instance_id}:{skill_name}", actor_id=_current_user.id, org_id=org.id)
     return ApiResponse(data={"skill_name": skill_name, "updated": True})
 
 
@@ -576,6 +580,7 @@ async def delete_skill_by_name(
         raise BadRequestError(message="skill_name 包含非法字符")
     _current_user, org = org_ctx
     result = await gene_service.delete_skill_by_name(db, instance_id, skill_name, org_id=org.id)
+    await hooks.emit("operation_audit", action="skill.deleted", target_type="skill", target_id=f"{instance_id}:{skill_name}", actor_id=_current_user.id, org_id=org.id)
     return ApiResponse(data=result)
 
 
@@ -588,6 +593,7 @@ async def install_gene(
 ):
     _current_user, org = org_ctx
     result = await gene_service.install_gene(db, instance_id, req.gene_slug, org_id=org.id)
+    await hooks.emit("operation_audit", action="gene.installed", target_type="instance_gene", target_id=result["id"], actor_id=_current_user.id, org_id=org.id, details={"instance_id": instance_id, "gene_slug": req.gene_slug})
     return ApiResponse(data=result)
 
 
@@ -600,6 +606,7 @@ async def uninstall_gene(
 ):
     _current_user, org = org_ctx
     result = await gene_service.uninstall_gene(db, instance_id, req.gene_id, org_id=org.id)
+    await hooks.emit("operation_audit", action="gene.uninstalled", target_type="instance_gene", target_id=req.gene_id, actor_id=_current_user.id, org_id=org.id, details={"instance_id": instance_id})
     return ApiResponse(data=result)
 
 
@@ -612,6 +619,7 @@ async def apply_genome(
 ):
     _current_user, org = org_ctx
     result = await gene_service.apply_genome(db, instance_id, req.genome_id, org.id)
+    await hooks.emit("operation_audit", action="genome.applied", target_type="genome", target_id=req.genome_id, actor_id=_current_user.id, org_id=org.id, details={"instance_id": instance_id, "installed": result.get("installed"), "skipped": result.get("skipped")})
     return ApiResponse(data=result)
 
 
@@ -633,6 +641,7 @@ async def publish_variant(
     result = await gene_service.publish_variant(
         db, instance_id, gene_id, req.variant_name, req.variant_slug
     )
+    await hooks.emit("operation_audit", action="gene.variant_published", target_type="gene", target_id=result["id"], actor_id=_current_user.id, org_id=org.id, details={"instance_id": instance_id, "parent_gene_id": gene_id})
     return ApiResponse(data=result)
 
 
@@ -661,6 +670,7 @@ async def create_gene_from_agent(
 ):
     _current_user, org = org_ctx
     result = await gene_service.trigger_gene_creation(db, instance_id, req.creation_prompt, org.id)
+    await hooks.emit("operation_audit", action="gene.creation_triggered", target_type="instance", target_id=instance_id, actor_id=_current_user.id, org_id=org.id, details={"task_id": result.get("task_id")})
     return ApiResponse(data=result)
 
 
@@ -829,6 +839,7 @@ async def admin_create_gene(
 ):
     # User 模型上没有 org_id 字段，真正的当前组织 id 是 current_org_id
     gene = await gene_service.create_gene(db, req, user_id=current_user.id, org_id=current_user.current_org_id)
+    await hooks.emit("operation_audit", action="gene.created", target_type="gene", target_id=gene["id"], actor_id=current_user.id, org_id=current_user.current_org_id)
     return ApiResponse(data=gene)
 
 
@@ -841,6 +852,7 @@ async def admin_update_gene(
     _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.update_gene(db, gene_id, req)
+    await hooks.emit("operation_audit", action="gene.updated", target_type="gene", target_id=gene_id, actor_id=_current_user.id, org_id=_current_user.current_org_id)
     return ApiResponse(data=result)
 
 
@@ -852,6 +864,7 @@ async def admin_delete_gene(
     _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.soft_delete_gene(db, gene_id)
+    await hooks.emit("operation_audit", action="gene.deleted", target_type="gene", target_id=gene_id, actor_id=_current_user.id, org_id=_current_user.current_org_id)
     return ApiResponse(data=result)
 
 
@@ -866,6 +879,8 @@ async def admin_review_gene(
     result = await gene_service.review_gene(
         db, gene_id, req.action, req.reason, current_user=current_user,
     )
+    # org_id 用操作者当前组织近似（service 允许超管跨组织审核，路由层拿不到 gene 真实所属 org）
+    await hooks.emit("operation_audit", action="gene.reviewed", target_type="gene", target_id=gene_id, actor_id=current_user.id, org_id=current_user.current_org_id, details={"review_action": req.action, "reason": req.reason})
     return ApiResponse(data=result)
 
 
@@ -881,6 +896,8 @@ async def admin_review_gene_overwrite_submission(
     result = await gene_service.review_gene_overwrite_submission(
         db, submission_id, req.action, req.reason, current_user=current_user,
     )
+    # org_id 同上，用操作者当前组织近似
+    await hooks.emit("operation_audit", action="gene_overwrite_submission.reviewed", target_type="gene_overwrite_submission", target_id=submission_id, actor_id=current_user.id, org_id=current_user.current_org_id, details={"review_action": req.action, "reason": req.reason})
     return ApiResponse(data=result)
 
 
@@ -914,6 +931,7 @@ async def admin_create_genome(
 ):
     # 同上：User 模型上没有 org_id 字段，真正的当前组织 id 是 current_org_id
     genome = await gene_service.create_genome(db, req, user_id=current_user.id, org_id=current_user.current_org_id)
+    await hooks.emit("operation_audit", action="genome.created", target_type="genome", target_id=genome["id"], actor_id=current_user.id, org_id=current_user.current_org_id)
     return ApiResponse(data=genome)
 
 
@@ -926,6 +944,7 @@ async def admin_update_genome(
     _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.update_genome(db, genome_id, req)
+    await hooks.emit("operation_audit", action="genome.updated", target_type="genome", target_id=genome_id, actor_id=_current_user.id, org_id=_current_user.current_org_id)
     return ApiResponse(data=result)
 
 
@@ -937,6 +956,7 @@ async def admin_delete_genome(
     _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.soft_delete_genome(db, genome_id)
+    await hooks.emit("operation_audit", action="genome.deleted", target_type="genome", target_id=genome_id, actor_id=_current_user.id, org_id=_current_user.current_org_id)
     return ApiResponse(data=result)
 
 
@@ -992,6 +1012,8 @@ async def create_manual_gene(
     # 仅个人 library 时立即同步到 agent 实例；其他目标等审核通过后由用户自行 install
     if req.target == "personal":
         await gene_service.install_gene_prerestart(req.instance_id, req.slug)
+    # target 已被限定为 personal，落库的 gene 没有 org 归属，org_id 传 None
+    await hooks.emit("operation_audit", action="gene.created", target_type="gene", target_id=gene_data["id"], actor_id=current_user.id, org_id=None, details={"name": req.name, "target": req.target})
     return ApiResponse(data=gene_data)
 
 
@@ -1023,6 +1045,8 @@ async def fork_gene(
         current_user=current_user,
         overwrite=req.overwrite,
     )
+    # org_id 用操作者当前组织近似（fork 的目标 scope 由 req.target 决定，不一定等于被 fork 的源 gene 所属组织）
+    await hooks.emit("operation_audit", action="gene.forked", target_type="gene", target_id=gene_data["id"], actor_id=current_user.id, org_id=current_user.current_org_id, details={"source": gene_identifier, "target": req.target})
     return ApiResponse(data=gene_data)
 
 
@@ -1035,6 +1059,8 @@ async def publish_gene_to_market(
     result = await gene_service.publish_gene_to_market(
         db, gene_id, user_id=current_user.id,
     )
+    # org_id 用操作者当前组织近似（gene 可能属于别的组织，路由层拿不到真实所属 org）
+    await hooks.emit("operation_audit", action="gene.published_to_market", target_type="gene", target_id=gene_id, actor_id=current_user.id, org_id=current_user.current_org_id)
     return ApiResponse(data=result)
 
 
@@ -1051,4 +1077,6 @@ async def delete_gene(
     - 409：有实例正在引用，需先卸载
     """
     result = await gene_service.delete_user_gene(db, gene_id, current_user=current_user)
+    # org_id 用操作者当前组织近似（同上，真实校验用的是 gene.org_id）
+    await hooks.emit("operation_audit", action="gene.deleted", target_type="gene", target_id=gene_id, actor_id=current_user.id, org_id=current_user.current_org_id, details={"cascaded_instance_genes": result.get("cascaded_instance_genes")})
     return ApiResponse(data=result)
