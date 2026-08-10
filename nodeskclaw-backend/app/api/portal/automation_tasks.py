@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.core.security import get_current_user
+from app.core import hooks
 from app.models.automation_task import AutomationTask
 from app.models.base import not_deleted
 from app.models.instance import Instance
@@ -192,6 +193,7 @@ async def create_automation_task(
     db.add(task)
     await db.commit()
     await db.refresh(task)
+    await hooks.emit("operation_audit", action="automation_task.created", target_type="automation_task", target_id=task.id, actor_id=current_user.id, org_id=current_user.current_org_id, details={"name": task.name, "instance_id": task.instance_id})
     return ApiResponse(data=_to_info(task, instance.name))
 
 
@@ -260,6 +262,7 @@ async def update_automation_task(
 
     await db.commit()
     await db.refresh(task)
+    await hooks.emit("operation_audit", action="automation_task.updated", target_type="automation_task", target_id=task_id, actor_id=current_user.id, org_id=current_user.current_org_id)
     return ApiResponse(data=_to_info(task, instance_name))
 
 
@@ -273,4 +276,5 @@ async def delete_automation_task(
     task = await _get_task_or_404(task_id, current_user.id, db)
     task.soft_delete()
     await db.commit()
+    await hooks.emit("operation_audit", action="automation_task.deleted", target_type="automation_task", target_id=task_id, actor_id=current_user.id, org_id=current_user.current_org_id)
     return ApiResponse(message="任务已删除")
