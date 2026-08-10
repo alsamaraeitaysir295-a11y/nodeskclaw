@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.corridors import _check_workspace
 from app.api.workspaces import broadcast_event
 from app.core.deps import get_current_org, get_db
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.blackboard import Blackboard
 from app.models.corridor import CorridorHex, HexConnection, ordered_pair
@@ -297,6 +298,7 @@ async def create_template(
         raise _error(409, 40960, "errors.template.name_duplicate", f"模板名称「{template_name}」已存在，请使用其他名称")
     await db.refresh(t)
     summ = template_summary_from_specs(t.agent_specs or [], t.human_specs or [])
+    await hooks.emit("operation_audit", action="template.created", target_type="template", target_id=t.id, actor_id=user.id if user else None, org_id=org_id, details={"name": template_name, "visibility": body.visibility, "source_workspace_id": source_workspace_id})
     return _ok(
         {
             "id": t.id,
@@ -419,6 +421,7 @@ async def deploy_from_template(
         )
     except ValueError as e:
         raise _error(400, 40053, "errors.template.deploy_invalid", str(e)) from e
+    await hooks.emit("operation_audit", action="template.deployed", target_type="template", target_id=template_id, actor_id=user.id, org_id=org_id, details={"workspace_name": body.workspace_name.strip(), "cluster_id": body.cluster_id})
     return _ok(out)
 
 
@@ -506,6 +509,7 @@ async def update_template(
         raise _error(409, 40960, "errors.template.name_duplicate", f"模板名称「{t.name}」已存在，请使用其他名称")
     await db.refresh(t)
     summ = template_summary_from_specs(t.agent_specs or [], t.human_specs or [])
+    await hooks.emit("operation_audit", action="template.updated", target_type="template", target_id=template_id, actor_id=user.id, org_id=org_id)
     return _ok({
         "id": t.id,
         "name": t.name,
@@ -551,6 +555,7 @@ async def delete_template(
 
     t.soft_delete()
     await db.commit()
+    await hooks.emit("operation_audit", action="template.deleted", target_type="template", target_id=template_id, actor_id=_user.id, org_id=_org_id(org))
     return _ok(message="已删除")
 
 
@@ -673,4 +678,5 @@ async def apply_template(
                 break
 
     broadcast_event(ws_id, "template:applied", {"template_id": template_id})
+    await hooks.emit("operation_audit", action="workspace.template_applied", target_type="workspace", target_id=ws_id, actor_id=user.id if user else None, org_id=_org_id(org), details={"template_id": template_id})
     return _ok(message="模板已应用")

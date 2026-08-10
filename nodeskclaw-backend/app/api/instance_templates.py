@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_org, get_db
+from app.core import hooks
 from app.schemas.common import ApiResponse, PaginatedResponse, Pagination
 from app.schemas.instance_template import (
     InstanceTemplateCreate,
@@ -65,6 +66,7 @@ async def create_template(
 ):
     user, org = org_info
     item = await svc.create_template(db, body, user_id=user.id, org_id=org.id)
+    await hooks.emit("operation_audit", action="instance_template.created", target_type="instance_template", target_id=item.id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=item.model_dump(mode="json"))
 
 
@@ -77,6 +79,7 @@ async def create_from_instance(
 ):
     user, org = org_info
     item = await svc.create_from_instance(db, instance_id, body, user_id=user.id, org_id=org.id)
+    await hooks.emit("operation_audit", action="instance_template.created_from_instance", target_type="instance_template", target_id=item.id, actor_id=user.id, org_id=org.id, details={"source_instance_id": instance_id})
     return ApiResponse(data=item.model_dump(mode="json"))
 
 
@@ -87,8 +90,9 @@ async def update_template(
     db: AsyncSession = Depends(get_db),
     org_info=Depends(get_current_org),
 ):
-    _user, org = org_info
+    user, org = org_info
     item = await svc.update_template(db, template_id, body, org.id)
+    await hooks.emit("operation_audit", action="instance_template.updated", target_type="instance_template", target_id=template_id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=item.model_dump(mode="json"))
 
 
@@ -98,6 +102,7 @@ async def delete_template(
     db: AsyncSession = Depends(get_db),
     org_info=Depends(get_current_org),
 ):
-    _user, org = org_info
+    user, org = org_info
     result = await svc.delete_template(db, template_id, org.id)
+    await hooks.emit("operation_audit", action="instance_template.deleted", target_type="instance_template", target_id=template_id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=result)
