@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.core.security import get_auth_actor
+from app.core import hooks
 from app.schemas.workspace import (
     FileCopyRequest,
     FileWriteRequest,
@@ -47,6 +48,16 @@ def _caller_info() -> tuple[str, str, str]:
     if actor is None:
         return "human", "", ""
     return actor.actor_type, actor.actor_id, actor.actor_name
+
+
+async def _get_workspace_org_id(workspace_id: str, db: AsyncSession) -> str | None:
+    from app.models.base import not_deleted
+    from app.models.workspace import Workspace
+    from sqlalchemy import select
+    result = await db.execute(
+        select(Workspace.org_id).where(Workspace.id == workspace_id, not_deleted(Workspace))
+    )
+    return result.scalar_one_or_none()
 
 
 async def _enforce_agent_blackboard_topology(
@@ -129,6 +140,7 @@ async def create_post(
         await _notify_mentions(
             workspace_id, mentions, author_name, post_info.id, data.title, "post", db,
         )
+    await hooks.emit("operation_audit", action="blackboard_post.created", target_type="blackboard_post", target_id=post_info.id, actor_id=author_id, actor_type=author_type, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok(post_info.model_dump(mode="json"))
 
 
@@ -162,6 +174,8 @@ async def update_post(
     if post is None:
         return _ok(None, "not found or not author")
     _broadcast(workspace_id, "post:updated", post.model_dump(mode="json"))
+    author_type, _, _ = _caller_info()
+    await hooks.emit("operation_audit", action="blackboard_post.updated", target_type="blackboard_post", target_id=post_id, actor_id=author_id, actor_type=author_type, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok(post.model_dump(mode="json"))
 
 
@@ -177,6 +191,8 @@ async def delete_post(
     ok = await workspace_service.delete_post(db, workspace_id, post_id)
     if ok:
         _broadcast(workspace_id, "post:deleted", {"post_id": post_id})
+        author_type, author_id, _ = _caller_info()
+        await hooks.emit("operation_audit", action="blackboard_post.deleted", target_type="blackboard_post", target_id=post_id, actor_id=author_id, actor_type=author_type, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok({"deleted": ok})
 
 
@@ -193,6 +209,8 @@ async def pin_post(
     if post is None:
         return _ok(None, "not found")
     _broadcast(workspace_id, "post:pinned", {"post_id": post_id, "is_pinned": True})
+    author_type, author_id, _ = _caller_info()
+    await hooks.emit("operation_audit", action="blackboard_post.pinned", target_type="blackboard_post", target_id=post_id, actor_id=author_id, actor_type=author_type, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok(post.model_dump(mode="json"))
 
 
@@ -209,6 +227,8 @@ async def unpin_post(
     if post is None:
         return _ok(None, "not found")
     _broadcast(workspace_id, "post:pinned", {"post_id": post_id, "is_pinned": False})
+    author_type, author_id, _ = _caller_info()
+    await hooks.emit("operation_audit", action="blackboard_post.unpinned", target_type="blackboard_post", target_id=post_id, actor_id=author_id, actor_type=author_type, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok(post.model_dump(mode="json"))
 
 
@@ -239,6 +259,7 @@ async def create_reply(
         await _notify_mentions(
             workspace_id, mentions, author_name, post_id, post.title, "reply", db,
         )
+    await hooks.emit("operation_audit", action="blackboard_reply.created", target_type="blackboard_reply", target_id=reply_info.id, actor_id=author_id, actor_type=author_type, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id, details={"post_id": post_id})
     return _ok(reply_info.model_dump(mode="json"))
 
 
@@ -302,6 +323,7 @@ async def mkdir(
         db, workspace_id, utype, uid, uname, data,
     )
     _broadcast(workspace_id, "file:created", info.model_dump(mode="json"))
+    await hooks.emit("operation_audit", action="blackboard_file.dir_created", target_type="blackboard_file", target_id=info.id, actor_id=uid, actor_type=utype, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok(info.model_dump(mode="json"))
 
 
@@ -319,6 +341,7 @@ async def upload_file(
         db, workspace_id, utype, uid, uname, data,
     )
     _broadcast(workspace_id, "file:uploaded", info.model_dump(mode="json"))
+    await hooks.emit("operation_audit", action="blackboard_file.uploaded", target_type="blackboard_file", target_id=info.id, actor_id=uid, actor_type=utype, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok(info.model_dump(mode="json"))
 
 
@@ -346,6 +369,7 @@ async def upload_file_multipart(
         parent_path=parent_path,
     )
     _broadcast(workspace_id, "file:uploaded", info.model_dump(mode="json"))
+    await hooks.emit("operation_audit", action="blackboard_file.uploaded", target_type="blackboard_file", target_id=info.id, actor_id=uid, actor_type=utype, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id, details={"filename": resolved_filename})
     return _ok(info.model_dump(mode="json"))
 
 
@@ -367,6 +391,7 @@ async def copy_file(
     if info is None:
         return _ok(None, "source file not found")
     _broadcast(workspace_id, "file:uploaded", info.model_dump(mode="json"))
+    await hooks.emit("operation_audit", action="blackboard_file.copied", target_type="blackboard_file", target_id=info.id, actor_id=uid, actor_type=utype, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id, details={"source_file_id": file_id})
     return _ok(info.model_dump(mode="json"))
 
 
@@ -413,4 +438,6 @@ async def delete_file(
     ok = await workspace_service.delete_shared_file(db, workspace_id, file_id)
     if ok:
         _broadcast(workspace_id, "file:deleted", {"file_id": file_id})
+        author_type, author_id, _ = _caller_info()
+        await hooks.emit("operation_audit", action="blackboard_file.deleted", target_type="blackboard_file", target_id=file_id, actor_id=author_id, actor_type=author_type, org_id=await _get_workspace_org_id(workspace_id, db), workspace_id=workspace_id)
     return _ok({"deleted": ok})

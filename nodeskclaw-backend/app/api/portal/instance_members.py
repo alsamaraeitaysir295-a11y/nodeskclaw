@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.core.security import get_current_user
+from app.core import hooks
 from app.models.instance_member import InstanceRole
 from app.models.user import User
 from app.schemas.common import ApiResponse
@@ -21,6 +22,16 @@ from app.services import instance_member_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _get_instance_org_id(instance_id: str, db: AsyncSession) -> str | None:
+    from app.models.base import not_deleted
+    from app.models.instance import Instance
+    from sqlalchemy import select
+    result = await db.execute(
+        select(Instance.org_id).where(Instance.id == instance_id, not_deleted(Instance))
+    )
+    return result.scalar_one_or_none()
 
 
 @router.get("/{instance_id}/members", response_model=ApiResponse[list[InstanceMemberInfo]])
@@ -70,6 +81,8 @@ async def add_member(
         instance_id, current_user, InstanceRole.admin, db
     )
     data = await instance_member_service.add_member(instance_id, body.user_id, body.role, db)
+    org_id = await _get_instance_org_id(instance_id, db)
+    await hooks.emit("operation_audit", action="instance_member.added", target_type="instance_member", target_id=data["id"], actor_id=current_user.id, org_id=org_id, details={"instance_id": instance_id, "user_id": body.user_id, "role": body.role})
     return ApiResponse(data=data)
 
 
@@ -85,6 +98,8 @@ async def update_member_role(
         instance_id, current_user, InstanceRole.admin, db
     )
     data = await instance_member_service.update_member(instance_id, member_id, body.role, db)
+    org_id = await _get_instance_org_id(instance_id, db)
+    await hooks.emit("operation_audit", action="instance_member.role_updated", target_type="instance_member", target_id=member_id, actor_id=current_user.id, org_id=org_id, details={"instance_id": instance_id, "role": body.role})
     return ApiResponse(data=data)
 
 
@@ -98,5 +113,7 @@ async def remove_member(
     await instance_member_service.check_instance_access(
         instance_id, current_user, InstanceRole.admin, db
     )
+    org_id = await _get_instance_org_id(instance_id, db)
     await instance_member_service.remove_member(instance_id, member_id, current_user.id, db)
+    await hooks.emit("operation_audit", action="instance_member.removed", target_type="instance_member", target_id=member_id, actor_id=current_user.id, org_id=org_id, details={"instance_id": instance_id})
     return ApiResponse(message="成员已移除")

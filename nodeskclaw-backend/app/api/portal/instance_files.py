@@ -6,10 +6,14 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.core.security import get_current_user
+from app.core import hooks
+from app.models.base import not_deleted
+from app.models.instance import Instance
 from app.models.instance_member import InstanceRole
 from app.models.user import User
 from app.schemas.common import ApiResponse
@@ -66,6 +70,11 @@ async def write_file_content(
     data = await enterprise_file_service.write_file_content(
         instance_id, body.path, body.content, db
     )
+    inst_q = await db.execute(
+        select(Instance.org_id).where(Instance.id == instance_id, not_deleted(Instance))
+    )
+    org_id = inst_q.scalar_one_or_none()
+    await hooks.emit("operation_audit", action="instance_file.written", target_type="instance", target_id=instance_id, actor_id=current_user.id, org_id=org_id, details={"path": body.path, "size": data.get("size")})
     return ApiResponse(data=data)
 
 
