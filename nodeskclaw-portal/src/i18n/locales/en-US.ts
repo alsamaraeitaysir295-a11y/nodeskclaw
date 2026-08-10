@@ -2219,6 +2219,14 @@ const enUS = {
     user_delete: "User Deleted",
     feature_override_set: "Feature Override Set",
     feature_override_clear: "Feature Override Cleared",
+    external_agent_created: "External Agent Created",
+    external_agent_updated: "External Agent Updated",
+    external_agent_deleted: "External Agent Deleted",
+    external_agent_synced: "External Agent Synced",
+    knowledge_base_created: "Knowledge Base Created",
+    knowledge_base_updated: "Knowledge Base Updated",
+    knowledge_base_deleted: "Knowledge Base Deleted",
+    knowledge_base_synced: "Knowledge Base Synced",
   },
   auditTargetTypes: {
     user: "User",
@@ -2229,6 +2237,8 @@ const enUS = {
     org_membership: "Org Membership",
     llm_key: "LLM Key",
     system_config: "System Config",
+    external_agent: "External Agent",
+    knowledge_base: "Knowledge Base",
   },
   agentPerformance: {
     navTitle: "Performance",

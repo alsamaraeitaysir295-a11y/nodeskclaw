@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import hooks
 from app.core.deps import (
     async_session_factory,
     get_current_org,
@@ -78,7 +79,7 @@ async def create_agent(
     auth=Depends(require_org_member_role("operator")),
 ):
     """创建外部 Agent 连接配置（需要 org operator 及以上）。"""
-    _, org = auth
+    user, org = auth
     agent = await external_agent_service.create_external_agent(
         org_id=org.id,
         name=body.name,
@@ -91,6 +92,7 @@ async def create_agent(
         theme_color=body.theme_color,
         db=db,
     )
+    await hooks.emit("operation_audit", action="external_agent.created", target_type="external_agent", target_id=agent.id, actor_id=user.id, org_id=org.id, details={"name": body.name})
     return ApiResponse(data=_to_response(agent))
 
 
@@ -113,11 +115,12 @@ async def update_agent(
     auth=Depends(require_org_member_role("operator")),
 ):
     """更新外部 Agent 配置（需要 org operator 及以上）。"""
-    _, org = auth
+    user, org = auth
     updates = body.model_dump(exclude_none=True)
     agent = await external_agent_service.update_external_agent(
         agent_id=agent_id, org_id=org.id, updates=updates, db=db
     )
+    await hooks.emit("operation_audit", action="external_agent.updated", target_type="external_agent", target_id=agent_id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=_to_response(agent))
 
 
@@ -128,10 +131,11 @@ async def delete_agent(
     auth=Depends(require_org_admin),
 ):
     """软删除外部 Agent（需要 org admin）。"""
-    _, org = auth
+    user, org = auth
     await external_agent_service.delete_external_agent(
         agent_id=agent_id, org_id=org.id, db=db
     )
+    await hooks.emit("operation_audit", action="external_agent.deleted", target_type="external_agent", target_id=agent_id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=None)
 
 
@@ -147,7 +151,7 @@ async def sync_agent(
 
     NAP 协议额外调用 /meta，将 capabilities / description 同步回数据库。
     """
-    _, org = auth
+    user, org = auth
     agent = await external_agent_service.get_external_agent(
         agent_id=agent_id, org_id=org.id, db=db
     )
@@ -174,6 +178,7 @@ async def sync_agent(
             logger.warning("NAP /meta fetch failed for agent %s, skipping meta sync", agent_id)
 
     await db.commit()
+    await hooks.emit("operation_audit", action="external_agent.synced", target_type="external_agent", target_id=agent_id, actor_id=user.id, org_id=org.id, details={"reachable": reachable})
     return ApiResponse(data={"reachable": reachable, "agent_id": agent_id})
 
 

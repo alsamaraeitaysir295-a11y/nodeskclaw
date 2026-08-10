@@ -2227,6 +2227,14 @@ const zhCN = {
     user_delete: "删除用户",
     feature_override_set: "设置功能覆盖",
     feature_override_clear: "清除功能覆盖",
+    external_agent_created: "创建外部 Agent",
+    external_agent_updated: "更新外部 Agent",
+    external_agent_deleted: "删除外部 Agent",
+    external_agent_synced: "同步外部 Agent",
+    knowledge_base_created: "创建知识库",
+    knowledge_base_updated: "更新知识库",
+    knowledge_base_deleted: "删除知识库",
+    knowledge_base_synced: "同步知识库",
   },
   auditTargetTypes: {
     user: "用户",
@@ -2237,6 +2245,8 @@ const zhCN = {
     org_membership: "组织成员",
     llm_key: "LLM 密钥",
     system_config: "系统配置",
+    external_agent: "外部 Agent",
+    knowledge_base: "知识库",
   },
   agentPerformance: {
     navTitle: "AI 员工绩效",

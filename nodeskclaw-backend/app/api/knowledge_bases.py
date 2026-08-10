@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import hooks
 from app.core.deps import get_db, require_org_admin, require_org_member_role
 from app.schemas.common import ApiResponse
 from app.schemas.skill import KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeBaseUpdate
@@ -28,6 +29,7 @@ async def create_kb(
         source_type=body.source_type,
         db=db,
     )
+    await hooks.emit("operation_audit", action="knowledge_base.created", target_type="knowledge_base", target_id=kb.id, actor_id=user.id, org_id=org.id, details={"name": body.name})
     return ApiResponse(data=KnowledgeBaseResponse.model_validate(kb))
 
 
@@ -53,6 +55,7 @@ async def update_kb(
     kb = await kb_service.update_knowledge_base(
         kb_id=kb_id, org_id=org.id, updates=updates, db=db
     )
+    await hooks.emit("operation_audit", action="knowledge_base.updated", target_type="knowledge_base", target_id=kb_id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=KnowledgeBaseResponse.model_validate(kb))
 
 
@@ -64,6 +67,7 @@ async def delete_kb(
 ):
     user, org = auth
     await kb_service.delete_knowledge_base(kb_id=kb_id, org_id=org.id, db=db)
+    await hooks.emit("operation_audit", action="knowledge_base.deleted", target_type="knowledge_base", target_id=kb_id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=None)
 
 
@@ -83,6 +87,7 @@ async def sync_kb(
     kb.is_reachable = reachable
     kb.last_checked_at = datetime.now(timezone.utc)
     await db.commit()
+    await hooks.emit("operation_audit", action="knowledge_base.synced", target_type="knowledge_base", target_id=kb_id, actor_id=user.id, org_id=org.id, details={"reachable": reachable})
     return ApiResponse(data={"reachable": reachable, "kb_id": kb_id})
 
 
