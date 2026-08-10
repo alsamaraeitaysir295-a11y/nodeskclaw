@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.channel_api_errors import channel_http_error
 from app.core.deps import get_db
 from app.core.security import get_current_user
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.instance import Instance
 from app.models.instance_member import InstanceRole
@@ -113,6 +114,7 @@ async def update_channel_configs(
     )
     instance = await _get_instance(instance_id, db)
     result = await write_channel_configs(instance, db, body.configs)
+    await hooks.emit("operation_audit", action="instance.channel_configs_updated", target_type="instance", target_id=instance_id, actor_id=current_user.id, org_id=instance.org_id)
     return _ok(result)
 
 
@@ -144,6 +146,7 @@ async def install_channel_npm(
     )
     instance = await _get_instance(instance_id, db)
     result = await install_npm_channel(instance, db, body.package_name)
+    await hooks.emit("operation_audit", action="channel_plugin.installed_npm", target_type="instance", target_id=instance_id, actor_id=current_user.id, org_id=instance.org_id, details={"package_name": body.package_name})
     return _ok(result)
 
 
@@ -159,6 +162,7 @@ async def deploy_channel_from_repo(
     )
     instance = await _get_instance(instance_id, db)
     result = await deploy_repo_channel(instance, db, body.channel_id)
+    await hooks.emit("operation_audit", action="channel_plugin.deployed_repo", target_type="instance", target_id=instance_id, actor_id=current_user.id, org_id=instance.org_id, details={"channel_id": body.channel_id})
     return _ok(result)
 
 
@@ -200,6 +204,7 @@ async def upload_channel(
         raise channel_http_error(400, 40064, "errors.channel.missing_plugin_manifest", "插件缺少 openclaw.plugin.json 或未定义 channels")
 
     result = await upload_channel_plugin(instance, db, plugin_files, plugin_id)
+    await hooks.emit("operation_audit", action="channel_plugin.uploaded", target_type="instance", target_id=instance_id, actor_id=current_user.id, org_id=instance.org_id, details={"plugin_id": plugin_id, "filename": file.filename})
     return _ok(result)
 
 

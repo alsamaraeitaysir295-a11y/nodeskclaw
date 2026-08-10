@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.channel_api_errors import channel_http_error
 from app.core.deps import get_current_org, get_db
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.instance import Instance
 from app.schemas.channel import (
@@ -108,9 +109,10 @@ async def update_channel_configs(
     db: AsyncSession = Depends(get_db),
 ):
     """写入 Channel 配置并重启 OpenClaw。"""
-    _, org = org_ctx
+    user, org = org_ctx
     instance = await _get_instance(instance_id, org.id, db)
     result = await write_channel_configs(instance, db, body.configs)
+    await hooks.emit("operation_audit", action="instance.channel_configs_updated", target_type="instance", target_id=instance_id, actor_id=user.id, org_id=org.id)
     return _ok(result)
 
 
@@ -137,9 +139,10 @@ async def install_channel_npm(
     db: AsyncSession = Depends(get_db),
 ):
     """通过 npm 安装第三方 Channel 插件。"""
-    _, org = org_ctx
+    user, org = org_ctx
     instance = await _get_instance(instance_id, org.id, db)
     result = await install_npm_channel(instance, db, body.package_name)
+    await hooks.emit("operation_audit", action="channel_plugin.installed_npm", target_type="instance", target_id=instance_id, actor_id=user.id, org_id=org.id, details={"package_name": body.package_name})
     return _ok(result)
 
 
@@ -151,9 +154,10 @@ async def deploy_channel_from_repo(
     db: AsyncSession = Depends(get_db),
 ):
     """从项目仓库部署自研 Channel 插件到实例。"""
-    _, org = org_ctx
+    user, org = org_ctx
     instance = await _get_instance(instance_id, org.id, db)
     result = await deploy_repo_channel(instance, db, body.channel_id)
+    await hooks.emit("operation_audit", action="channel_plugin.deployed_repo", target_type="instance", target_id=instance_id, actor_id=user.id, org_id=org.id, details={"channel_id": body.channel_id})
     return _ok(result)
 
 
@@ -165,7 +169,7 @@ async def upload_channel(
     db: AsyncSession = Depends(get_db),
 ):
     """上传 Channel 插件文件（tgz/zip）到实例。"""
-    _, org = org_ctx
+    user, org = org_ctx
     instance = await _get_instance(instance_id, org.id, db)
 
     if not file.filename:
@@ -194,6 +198,7 @@ async def upload_channel(
         raise channel_http_error(400, 40064, "errors.channel.missing_plugin_manifest", "插件缺少 openclaw.plugin.json 或未定义 channels")
 
     result = await upload_channel_plugin(instance, db, plugin_files, plugin_id)
+    await hooks.emit("operation_audit", action="channel_plugin.uploaded", target_type="instance", target_id=instance_id, actor_id=user.id, org_id=org.id, details={"plugin_id": plugin_id, "filename": file.filename})
     return _ok(result)
 
 
