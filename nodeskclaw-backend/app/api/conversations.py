@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_org, get_db
 from app.core.exceptions import NotFoundError, ForbiddenError
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.conversation import Conversation
 from app.models.workspace import Workspace
@@ -143,6 +144,7 @@ async def create_conversation(
     conv = await conversation_service.create_manual_conversation(
         db, workspace_id, body.name, body.member_node_ids,
     )
+    await hooks.emit("operation_audit", action="conversation.created", target_type="conversation", target_id=conv.id, actor_id=user.id, org_id=_org_id(org), workspace_id=workspace_id, details={"name": body.name})
     return _ok(_conv_dict(conv))
 
 
@@ -171,4 +173,5 @@ async def delete_conversation(
 
     conv.deleted_at = datetime.now(timezone.utc)
     await db.commit()
+    await hooks.emit("operation_audit", action="conversation.deleted", target_type="conversation", target_id=conv_id, actor_id=user.id, org_id=_org_id(org), workspace_id=workspace_id)
     return _ok()

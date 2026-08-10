@@ -168,6 +168,7 @@ async def create_corridor_hex(
         new_value={"hex_q": ch.hex_q, "hex_r": ch.hex_r, "display_name": ch.display_name},
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="corridor_hex.created", target_type="corridor_hex", target_id=ch.id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org_ctx[1]), workspace_id=workspace_id)
     return _ok(CorridorHexInfo(
         id=ch.id, workspace_id=ch.workspace_id,
         hex_q=ch.hex_q, hex_r=ch.hex_r,
@@ -270,6 +271,7 @@ async def update_corridor_hex(
         new_value={"display_name": ch.display_name, "hex_q": ch.hex_q, "hex_r": ch.hex_r},
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="corridor_hex.updated", target_type="corridor_hex", target_id=ch.id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org_ctx[1]), workspace_id=workspace_id)
     return _ok(CorridorHexInfo(
         id=ch.id, workspace_id=ch.workspace_id,
         hex_q=ch.hex_q, hex_r=ch.hex_r,
@@ -335,6 +337,7 @@ async def delete_corridor_hex(
         action="corridor_hex_deleted", target_type="corridor_hex", target_id=deleted_id,
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="corridor_hex.deleted", target_type="corridor_hex", target_id=deleted_id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org_ctx[1]), workspace_id=workspace_id)
     return _ok(message="deleted")
 
 
@@ -390,6 +393,7 @@ async def create_connection(
                    "hex_b_q": conn.hex_b_q, "hex_b_r": conn.hex_b_r},
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="corridor_connection.created", target_type="connection", target_id=conn.id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org_ctx[1]), workspace_id=workspace_id)
     return _ok(ConnectionInfo(
         id=conn.id, workspace_id=conn.workspace_id,
         hex_a_q=conn.hex_a_q, hex_a_r=conn.hex_a_r,
@@ -457,6 +461,7 @@ async def delete_connection(
         action="connection_deleted", target_type="connection", target_id=conn.id,
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="corridor_connection.deleted", target_type="connection", target_id=conn.id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org_ctx[1]), workspace_id=workspace_id)
     return _ok(message="deleted")
 
 
@@ -520,6 +525,7 @@ async def create_human_hex(
         new_value={"user_id": body.user_id, "hex_q": hh.hex_q, "hex_r": hh.hex_r},
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="human_hex.created", target_type="human_hex", target_id=hh.id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org), workspace_id=workspace_id)
     return _ok(HumanHexInfo(
         id=hh.id, workspace_id=hh.workspace_id, user_id=hh.user_id,
         hex_q=hh.hex_q, hex_r=hh.hex_r, display_name=hh.display_name,
@@ -606,6 +612,7 @@ async def update_human_hex(
         new_value={"hex_q": hh.hex_q, "hex_r": hh.hex_r, "display_name": hh.display_name, "display_color": hh.display_color},
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="human_hex.updated", target_type="human_hex", target_id=hex_id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org), workspace_id=workspace_id)
     return _ok(HumanHexInfo(
         id=hh.id, workspace_id=hh.workspace_id, user_id=hh.user_id,
         hex_q=hh.hex_q, hex_r=hh.hex_r, display_name=hh.display_name,
@@ -650,6 +657,7 @@ async def delete_human_hex(
         action="human_hex_removed", target_type="human_hex", target_id=hex_id,
         actor_type=actor_type, actor_id=actor_id,
     )
+    await hooks.emit("operation_audit", action="human_hex.deleted", target_type="human_hex", target_id=hex_id, actor_id=actor_id, actor_type=actor_type, org_id=_org_id(org), workspace_id=workspace_id)
     return _ok(message="human hex removed")
 
 
