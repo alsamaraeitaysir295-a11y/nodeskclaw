@@ -6,10 +6,13 @@
     <!-- 筛选区：actor 输入、action 下拉、时间范围、查询按钮 -->
     <div class="flex gap-2 text-sm">
       <input v-model="actor" placeholder="actor_id" class="border rounded px-2 py-1" />
-      <select v-model="action" class="border rounded px-2 py-1">
-        <option value="">所有动作</option>
-        <option v-for="a in actionOptions" :key="a" :value="a">{{ a }}</option>
-      </select>
+      <CustomSelect
+        v-model="action"
+        :options="actionSelectOptions"
+        placeholder="所有动作"
+        size="xs"
+        trigger-class="w-40"
+      />
       <input v-model="fromTs" type="datetime-local" class="border rounded px-2 py-1" />
       <input v-model="toTs" type="datetime-local" class="border rounded px-2 py-1" />
       <button @click="reload(1)" class="border px-3 py-1 rounded">查询</button>
@@ -56,9 +59,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAdminApi, type AdminAuditRow } from '@/services/adminApi'
+import CustomSelect, { type SelectOption } from '@/components/shared/CustomSelect.vue'
 
 const api = useAdminApi()
 const { t, te } = useI18n()
@@ -79,12 +83,15 @@ function truncate(s: string | null | undefined, max = 12): string {
 
 // 筛选条件
 const actor = ref('')
-const action = ref('')
+const action = ref<string | null>(null)
 const fromTs = ref('')
 const toTs = ref('')
 
-// 下拉选项：从后端拉取可用动作枚举
+// 下拉选项：从后端拉取可用动作枚举，转成中文化的 CustomSelect 选项
 const actionOptions = ref<string[]>([])
+const actionSelectOptions = computed<SelectOption[]>(() =>
+  actionOptions.value.map(a => ({ value: a, label: localizeAction(a) })),
+)
 
 // 表格数据和分页状态
 const rows = ref<AdminAuditRow[]>([])
@@ -101,8 +108,9 @@ async function reload(p = page.value) {
   const res = await api.fetchAuditLogs({
     actor: actor.value || undefined,
     action: action.value || undefined,
-    from: fromTs.value || undefined,
-    to: toTs.value || undefined,
+    // datetime-local 输入的是不带时区的本地时间字符串，必须转成 ISO UTC 才能跟后端时间比较对上
+    from: fromTs.value ? new Date(fromTs.value).toISOString() : undefined,
+    to: toTs.value ? new Date(toTs.value).toISOString() : undefined,
     page: p,
     pageSize: pageSize.value,
   })
