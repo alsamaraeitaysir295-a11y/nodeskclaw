@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_org, get_db
+from app.core import hooks as audit_hooks
 from app.services.runtime.registries.node_type_registry import NODE_TYPE_REGISTRY
 from app.services.runtime.registries.transport_registry import TRANSPORT_REGISTRY
 from app.services.runtime.registries.runtime_registry import RUNTIME_REGISTRY
@@ -66,6 +67,7 @@ async def register_node_type(
         RoutingRole,
     )
 
+    user, org = org_ctx
     if NODE_TYPE_REGISTRY.is_registered(body.type_id):
         return _ok(message=f"node type '{body.type_id}' already registered")
 
@@ -89,6 +91,7 @@ async def register_node_type(
     NODE_TYPE_REGISTRY.register(spec)
     await NODE_TYPE_REGISTRY.sync_to_db(db)
     await db.commit()
+    await audit_hooks.emit("operation_audit", action="node_type.registered", target_type="node_type", target_id=body.type_id, actor_id=user.id, org_id=org.id, details={"routing_role": body.routing_role, "transport": body.transport})
     return _ok({"type_id": body.type_id})
 
 

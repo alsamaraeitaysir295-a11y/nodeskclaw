@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db
 from app.core.security import get_current_user
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.instance import Instance
 from app.models.instance_mcp_server import InstanceMcpServer
@@ -77,7 +78,8 @@ async def create_mcp_server(
     inst_q = await db.execute(
         select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
     )
-    if not inst_q.scalar_one_or_none():
+    instance = inst_q.scalar_one_or_none()
+    if not instance:
         raise _mcp_http_error(404, 40470, "errors.instance.not_found", "实例不存在")
 
     mcp = InstanceMcpServer(
@@ -93,6 +95,7 @@ async def create_mcp_server(
     db.add(mcp)
     await db.commit()
     await db.refresh(mcp)
+    await hooks.emit("operation_audit", action="mcp_server.created", target_type="mcp_server", target_id=mcp.id, actor_id=current_user.id, org_id=instance.org_id, details={"instance_id": instance_id, "name": body.name, "transport": body.transport})
     return _ok(_mcp_to_info(mcp))
 
 
@@ -105,6 +108,10 @@ async def update_mcp_server(
     await instance_member_service.check_instance_access(
         instance_id, current_user, InstanceRole.editor, db
     )
+    inst_q = await db.execute(
+        select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
+    )
+    instance = inst_q.scalar_one_or_none()
     result = await db.execute(
         select(InstanceMcpServer).where(
             InstanceMcpServer.id == mcp_id,
@@ -120,6 +127,7 @@ async def update_mcp_server(
         if val is not None:
             setattr(mcp, field, val)
     await db.commit()
+    await hooks.emit("operation_audit", action="mcp_server.updated", target_type="mcp_server", target_id=mcp_id, actor_id=current_user.id, org_id=instance.org_id if instance else None)
     return _ok(_mcp_to_info(mcp))
 
 
@@ -132,6 +140,10 @@ async def delete_mcp_server(
     await instance_member_service.check_instance_access(
         instance_id, current_user, InstanceRole.editor, db
     )
+    inst_q = await db.execute(
+        select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
+    )
+    instance = inst_q.scalar_one_or_none()
     result = await db.execute(
         select(InstanceMcpServer).where(
             InstanceMcpServer.id == mcp_id,
@@ -144,4 +156,5 @@ async def delete_mcp_server(
         raise _mcp_http_error(404, 40471, "errors.mcp.server_not_found", "MCP 服务不存在")
     mcp.soft_delete()
     await db.commit()
+    await hooks.emit("operation_audit", action="mcp_server.deleted", target_type="mcp_server", target_id=mcp_id, actor_id=current_user.id, org_id=instance.org_id if instance else None)
     return _ok(message="deleted")

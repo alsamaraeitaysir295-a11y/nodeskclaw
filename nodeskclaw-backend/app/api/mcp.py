@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_org, get_db
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.instance import Instance
 from app.models.instance_mcp_server import InstanceMcpServer
@@ -92,7 +93,7 @@ async def create_mcp_server(
     instance_id: str, body: McpServerCreate,
     org_ctx=Depends(get_current_org), db: AsyncSession = Depends(get_db),
 ):
-    _, org = org_ctx
+    user, org = org_ctx
     await _get_instance(instance_id, org.id, db)
 
     mcp = InstanceMcpServer(
@@ -108,6 +109,7 @@ async def create_mcp_server(
     db.add(mcp)
     await db.commit()
     await db.refresh(mcp)
+    await hooks.emit("operation_audit", action="mcp_server.created", target_type="mcp_server", target_id=mcp.id, actor_id=user.id, org_id=org.id, details={"instance_id": instance_id, "name": body.name, "transport": body.transport})
     return _ok(_mcp_to_info(mcp))
 
 
@@ -116,7 +118,7 @@ async def update_mcp_server(
     instance_id: str, mcp_id: str, body: McpServerUpdate,
     org_ctx=Depends(get_current_org), db: AsyncSession = Depends(get_db),
 ):
-    _, org = org_ctx
+    user, org = org_ctx
     await _get_instance(instance_id, org.id, db)
     mcp = await _get_mcp_server(instance_id, mcp_id, db)
     for field in ("name", "transport", "command", "url", "args", "env", "is_active"):
@@ -124,6 +126,7 @@ async def update_mcp_server(
         if val is not None:
             setattr(mcp, field, val)
     await db.commit()
+    await hooks.emit("operation_audit", action="mcp_server.updated", target_type="mcp_server", target_id=mcp_id, actor_id=user.id, org_id=org.id)
     return _ok(_mcp_to_info(mcp))
 
 
@@ -132,9 +135,10 @@ async def delete_mcp_server(
     instance_id: str, mcp_id: str,
     org_ctx=Depends(get_current_org), db: AsyncSession = Depends(get_db),
 ):
-    _, org = org_ctx
+    user, org = org_ctx
     await _get_instance(instance_id, org.id, db)
     mcp = await _get_mcp_server(instance_id, mcp_id, db)
     mcp.soft_delete()
     await db.commit()
+    await hooks.emit("operation_audit", action="mcp_server.deleted", target_type="mcp_server", target_id=mcp_id, actor_id=user.id, org_id=org.id)
     return _ok(message="deleted")

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_org, get_current_org_or_agent, get_db
+from app.core import hooks
 from app.models.base import not_deleted
 from app.models.decision_record import DecisionRecord
 from app.models.trust_policy import TrustPolicy
@@ -141,6 +142,7 @@ async def create_trust_policy(
     )
     db.add(policy)
     await db.commit()
+    await hooks.emit("operation_audit", action="trust_policy.created", target_type="trust_policy", target_id=policy.id, actor_id=_user_id(user), org_id=_org_id(org), details={"workspace_id": body.workspace_id, "agent_instance_id": body.agent_instance_id, "action_type": body.action_type, "grant_type": body.grant_type})
     return _ok({"id": policy.id, "grant_type": policy.grant_type})
 
 
@@ -174,6 +176,7 @@ async def submit_approval_request(
     org_ctx=Depends(get_current_org_or_agent), db: AsyncSession = Depends(get_db),
 ):
     """Submit an approval request that routes to Human Hex via channel adapter."""
+    from app.core.security import get_auth_actor
     from app.models.corridor import HumanHex
     from app.services import corridor_router
 
@@ -208,6 +211,16 @@ async def submit_approval_request(
     )
     db.add(record)
     await db.commit()
+
+    # 此接口人类/AI 员工均可调用（get_current_org_or_agent），actor_type 从
+    # contextvar 里取真实值：agent 发起时 CE handler 会自动跳过不落库，
+    # 避免把 agent_instance_id 误当成 user_id 写进 actor_id 列
+    auth_actor = get_auth_actor()
+    await hooks.emit(
+        "operation_audit", action="approval_request.submitted", target_type="decision_record", target_id=record.id,
+        actor_id=auth_actor.actor_id if auth_actor else effective_agent_id, actor_type=auth_actor.actor_type if auth_actor else "agent",
+        org_id=_org_id(org), details={"workspace_id": body.workspace_id, "action_type": body.action_type, "agent_instance_id": effective_agent_id},
+    )
 
     from app.core.config import get_nodeskclaw_webhook_base_url, settings
 
@@ -292,6 +305,7 @@ async def resolve_approval(
         record.review_comment = "Denied"
 
     await db.commit()
+    await hooks.emit("operation_audit", action="approval_request.resolved", target_type="decision_record", target_id=record_id, actor_id=_user_id(user), org_id=_org_id(org), details={"decision": body.decision})
     return _ok({"decision": body.decision, "record_id": record.id})
 
 
