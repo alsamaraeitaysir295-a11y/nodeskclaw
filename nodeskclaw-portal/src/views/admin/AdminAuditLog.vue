@@ -31,9 +31,9 @@
           <!-- 主行：点击切换 details 展开/收起 -->
           <tr class="hover:bg-muted/50 cursor-pointer" @click="toggle(r.id)">
             <td class="py-1">{{ r.created_at }}</td>
-            <td class="py-1">{{ r.actor_name ?? r.actor_id }}</td>
-            <td class="py-1">{{ r.action }}</td>
-            <td class="py-1">{{ r.target_type }}:{{ r.target_id }}</td>
+            <td class="py-1">{{ r.actor_name || truncate(r.actor_id) }}</td>
+            <td class="py-1">{{ localizeAction(r.action) }}</td>
+            <td class="py-1">{{ r.target_type ? localizeTargetType(r.target_type) : '-' }}:{{ truncate(r.target_id) }}</td>
             <td class="py-1">{{ r.details?.status ?? '-' }}</td>
           </tr>
           <!-- 展开行：以 pre 展示 details JSON，使用 Set 判断是否展开 -->
@@ -57,9 +57,25 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAdminApi, type AdminAuditRow } from '@/services/adminApi'
 
 const api = useAdminApi()
+const { t, te } = useI18n()
+
+// 动作/目标类型中文化：与组织设置操作审计页面（AuditLogTable.vue）共用同一套 auditActions/auditTargetTypes 字典
+function localizeAction(action: string): string {
+  const key = 'auditActions.' + action.replace(/\./g, '_')
+  return te(key) ? t(key) : action
+}
+function localizeTargetType(tt: string): string {
+  const key = 'auditTargetTypes.' + tt
+  return te(key) ? t(key) : tt
+}
+function truncate(s: string | null | undefined, max = 12): string {
+  if (!s) return '-'
+  return s.length > max ? s.slice(0, max) + '...' : s
+}
 
 // 筛选条件
 const actor = ref('')

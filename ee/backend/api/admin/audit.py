@@ -11,6 +11,7 @@ from app.core.deps import get_db, require_super_admin_dep
 from app.models.admin_action import AdminAction
 from app.models.user import User
 from app.schemas.common import ApiResponse, PaginatedResponse, Pagination
+from app.services.audit_actor_names import batch_resolve_actor_display_names
 from ee.backend.services.admin import audit_service
 from ee.backend.services.admin.errors import AdminErrorCode, raise_admin_error
 
@@ -67,12 +68,15 @@ async def list_audit(
         page_size=page_size,
     )
 
+    user_ids = {r.actor_id for r in rows if r.actor_type == "user" and not r.actor_name}
+    name_map = await batch_resolve_actor_display_names(db, user_ids)
+
     data = [
         {
             "id": r.id,
             "action": r.action,
             "actor_id": r.actor_id,
-            "actor_name": r.actor_name,
+            "actor_name": r.actor_name or name_map.get(r.actor_id),
             "actor_type": r.actor_type,
             "target_type": r.target_type,
             "target_id": r.target_id,

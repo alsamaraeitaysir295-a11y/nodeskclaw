@@ -8,7 +8,7 @@ class AdminAction(str, Enum):
 
     新增枚举值时必须同步：
       1. 本 enum
-      2. 前端 i18n（zh-CN + en）的 `admin.audit.actions.<value>`
+      2. 前端 i18n（zh-CN + en）的 `auditActions.<value 中的 . 换成 _>`
       3. 审计单测（覆盖 service 路径）
     """
 

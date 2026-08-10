@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db, require_org_admin
 from app.models.operation_audit_log import OperationAuditLog
-from app.models.user import User
 from app.schemas.common import PaginatedResponse, Pagination
+from app.services.audit_actor_names import batch_resolve_actor_display_names
 
 router = APIRouter()
 
@@ -46,10 +46,7 @@ async def _enrich_actor_names(
     rows: list[OperationAuditLog],
 ) -> dict[str, str]:
     user_ids = {r.actor_id for r in rows if r.actor_type == "user" and not r.actor_name}
-    if not user_ids:
-        return {}
-    result = await db.execute(select(User.id, User.name).where(User.id.in_(user_ids)))
-    return {uid: uname for uid, uname in result.all()}
+    return await batch_resolve_actor_display_names(db, user_ids)
 
 
 def _serialize(row: OperationAuditLog, name_map: dict[str, str] | None = None) -> dict:

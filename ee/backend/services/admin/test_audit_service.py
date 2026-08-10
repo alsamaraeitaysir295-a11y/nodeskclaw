@@ -43,6 +43,27 @@ async def test_with_audit_success_writes_row(db_session, super_admin_user):
 
 
 @pytest.mark.asyncio
+async def test_with_audit_writes_actor_name_from_user_name(db_session, super_admin_user):
+    """actor_name 应优先取 User.name，而不是 email（手机号登录账号可能没有邮箱）。"""
+    super_admin_user.name = "顾明强"
+    super_admin_user.email = None
+    await db_session.flush()
+
+    async with audit_service.with_audit(
+        db_session,
+        action=AdminAction.AUTH_LOGOUT,
+        actor=super_admin_user,
+        target_type="user",
+        target_id=super_admin_user.id,
+    ):
+        pass
+
+    rows = (await db_session.execute(select(OperationAuditLog))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].actor_name == "顾明强"
+
+
+@pytest.mark.asyncio
 async def test_with_audit_failure_writes_failure_row(db_session, super_admin_user):
     """失败路径：异常发生时写入 status=failed 审计行，并重新 raise 原始异常。"""
     with pytest.raises(RuntimeError):

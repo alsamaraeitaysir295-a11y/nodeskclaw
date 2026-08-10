@@ -124,7 +124,7 @@ async def _write(
     # 登录失败等匿名路径：actor_id 用 "anonymous" 占位（NOT NULL 列要求）
     actor_id = actor.id if actor else "anonymous"
     actor_type = "user" if actor else "anonymous"
-    actor_name = actor.email if actor else None
+    actor_name = (actor.name or actor.email) if actor else None
 
     # 将网络信息附加到 details
     if actor_ip:
