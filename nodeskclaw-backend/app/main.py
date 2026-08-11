@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
@@ -405,9 +406,11 @@ async def lifespan(app: FastAPI):
 
                     _existing = (await _seed_db.execute(
                         select(_SeedGene).where(_SeedGene.slug == _slug, _seed_not_deleted(_SeedGene))
-                    )).scalar_one_or_none()
+                    )).scalars().first()
                     if _existing is None:
+                        _new_gene_id = str(uuid.uuid4())
                         _seed_db.add(_SeedGene(
+                            id=_new_gene_id,
                             name=_tpl["name"],
                             slug=_slug,
                             description=_tpl.get("description"),
@@ -419,6 +422,7 @@ async def lifespan(app: FastAPI):
                             is_published=True,
                             review_status="approved",
                             source_registry="local",
+                            lineage_group_id=_new_gene_id,  # NOT NULL 列，全新种子用自身 id 作血缘起点
                         ))
                         _seeded_genes += 1
                     else:
@@ -437,7 +441,7 @@ async def lifespan(app: FastAPI):
                     _slug = _tpl["slug"]
                     _existing = (await _seed_db.execute(
                         select(_SeedGenome).where(_SeedGenome.slug == _slug, _seed_not_deleted(_SeedGenome))
-                    )).scalar_one_or_none()
+                    )).scalars().first()
                     if _existing is None:
                         _seed_db.add(_SeedGenome(
                             name=_tpl["name"],
