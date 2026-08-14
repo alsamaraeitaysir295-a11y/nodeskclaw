@@ -6,6 +6,7 @@ const zhCN = {
     members: "成员",
     usage: "用量",
     geneMarket: "技能市场",
+    agent: "Agent",
     overview: "概览",
     genes: "技能基因",
     evolutionLog: "进化日志",

@@ -119,7 +119,7 @@ onMounted(() => {
             {{ t('instanceList.createInstance') }}
           </button>
         </BaseTooltip>
-        <BaseTooltip :text="!hasCluster ? t('instanceList.noClusterHint') : ''">
+        <BaseTooltip v-if="canCreate" :text="!hasCluster ? t('instanceList.noClusterHint') : ''">
           <button
             class="flex items-center gap-2 px-3 py-2 rounded-lg border border-border text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
             :disabled="!hasCluster"

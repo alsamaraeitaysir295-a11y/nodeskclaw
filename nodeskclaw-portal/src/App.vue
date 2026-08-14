@@ -136,7 +136,7 @@ function onLocaleChange(value: string) {
               @click="router.push('/agents')"
             >
               <Bot class="w-4 h-4 inline mr-1.5" />
-              Agent
+              {{ t('common.agent') }}
             </button>
             <button
               :class="[

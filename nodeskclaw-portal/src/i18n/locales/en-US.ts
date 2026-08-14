@@ -6,6 +6,7 @@ const enUS = {
     members: "Members",
     usage: "Usage",
     geneMarket: "Gene Market",
+    agent: "Agent",
     overview: "Overview",
     genes: "Skill Genes",
     evolutionLog: "Evolution Log",
