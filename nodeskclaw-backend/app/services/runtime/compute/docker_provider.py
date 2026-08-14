@@ -249,8 +249,10 @@ async def _seed_template_from_image(config: InstanceComputeConfig, data_dir: Pat
     tmp_container = f"tmpl-seed-{config.slug}-{uuid.uuid4().hex[:8]}"
 
     try:
+        # --pull=never：与 _build_compose_yaml 的 pull_policy="missing" 保持一致，
+        # 本地没有镜像时直接失败而不是隐式拉取阻塞（大镜像/镜像源不通会导致 create 无限期挂起）
         rc, stdout, stderr = await _run_docker(
-            "docker", "create", "--platform", "linux/amd64", "--name", tmp_container, image,
+            "docker", "create", "--pull", "never", "--platform", "linux/amd64", "--name", tmp_container, image,
         )
         if rc != 0:
             logger.warning("seed_template: docker create failed: %s", stderr.decode().strip()[:300])
