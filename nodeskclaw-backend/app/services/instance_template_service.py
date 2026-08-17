@@ -241,15 +241,11 @@ async def list_templates(
     page_size: int = 20,
     requesting_user_id: str | None = None,
 ) -> tuple[list[InstanceTemplateInfo], int]:
-    q = select(InstanceTemplate).where(not_deleted(InstanceTemplate))
-    if requesting_user_id:
-        # 待审模板对其他人不可见，但创建者本人始终能看到自己上传的（含待审）
-        q = q.where(or_(InstanceTemplate.is_published.is_(True), InstanceTemplate.created_by == requesting_user_id))
-    else:
-        q = q.where(InstanceTemplate.is_published.is_(True))
+    q = select(InstanceTemplate).where(not_deleted(InstanceTemplate), InstanceTemplate.is_published.is_(True))
     if visibility == "personal":
-        # 个人库严格按 created_by 过滤；requesting_user_id 为空时 created_by == None
-        # 恒不匹配（个人模板 created_by 必然非空），天然返回空列表，不会越权浏览他人个人库
+        # 个人库严格按 created_by 过滤；is_published 恒为 True（个人库免审），
+        # requesting_user_id 为空时 created_by == None 恒不匹配，天然返回空列表，
+        # 不会越权浏览他人个人库
         q = q.where(InstanceTemplate.visibility == "personal", InstanceTemplate.created_by == requesting_user_id)
     elif visibility == "org_private":
         q = q.where(InstanceTemplate.visibility == "org_private", InstanceTemplate.org_id == org_id)
