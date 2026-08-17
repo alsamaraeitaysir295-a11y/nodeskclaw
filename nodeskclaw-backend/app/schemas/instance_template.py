@@ -47,6 +47,10 @@ class InstanceTemplateUpdate(BaseModel):
     gene_slugs: list[str] | None = None
 
 
+class TemplateForkRequest(BaseModel):
+    target: Literal["personal", "org", "public"]
+
+
 class GeneRef(BaseModel):
     slug: str
     name: str
@@ -71,6 +75,7 @@ class InstanceTemplateInfo(BaseModel):
     use_count: int = 0
     created_by: str | None = None
     org_id: str | None = None
+    visibility: str | None = None
     review_status: str | None = None
     created_at: datetime | None = None
 

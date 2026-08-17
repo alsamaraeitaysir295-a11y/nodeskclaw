@@ -6,7 +6,7 @@ import logging
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models.base import not_deleted
 from app.models.gene import Gene, GeneReviewStatus, Genome, InstanceGene
 from app.models.instance import Instance
@@ -35,25 +35,36 @@ def _can_manage_template(tpl: InstanceTemplate, org_id: str | None) -> bool:
 
 async def _resolve_template_review_attrs(
     db: AsyncSession,
+    target: str,
     *,
     user_id: str,
     org_id: str | None,
     is_super_admin: bool,
 ) -> dict:
-    """派生新建模板的 visibility/is_published/review_status。
+    """根据 fork 目标 (personal/org/public) 派生模板行的归属字段。
 
-    与 gene_service.resolve_target_attrs 的 org 分支一致：归属组织，
-    默认需组织 operator/admin 审核通过才可见；上传者本身是该 org 的
-    admin 或平台超管时 bypass，直接 approved。org_id 为空（无组织上下文）
-    时没有"组织"可以审核，保持原有立即可用行为。
+    与 gene_service.resolve_target_attrs 保持一致的三段式：
+      - personal：归属个人，无需审核，立即可用
+      - org/public：归属组织，pending_owner 等组织 operator/admin 审核；
+        操作者本身是目标 org 的 admin 或平台超管时 bypass，直接 approved
     """
+    if target == "personal":
+        return {
+            "visibility": "personal",
+            "org_id": None,
+            "is_published": True,
+            "review_status": None,
+        }
+    if target not in ("org", "public"):
+        raise BadRequestError(f"未知 fork 目标: {target}")
     if not org_id:
-        return {"visibility": "public", "is_published": True, "review_status": None}
+        raise BadRequestError("org/public 目标必须提供 org_id")
     bypass = await gene_service.is_user_admin_of_org(
         db, user_id=user_id, org_id=org_id, is_super_admin=is_super_admin,
     )
     return {
-        "visibility": "org_private",
+        "visibility": "org_private" if target == "org" else "public",
+        "org_id": org_id,
         "is_published": bypass,
         "review_status": GeneReviewStatus.approved if bypass else GeneReviewStatus.pending_owner,
     }
@@ -213,6 +224,7 @@ def _template_to_info(
         use_count=tpl.use_count,
         created_by=tpl.created_by,
         org_id=tpl.org_id,
+        visibility=tpl.visibility,
         review_status=tpl.review_status,
         created_at=tpl.created_at,
     )
@@ -235,7 +247,11 @@ async def list_templates(
         q = q.where(or_(InstanceTemplate.is_published.is_(True), InstanceTemplate.created_by == requesting_user_id))
     else:
         q = q.where(InstanceTemplate.is_published.is_(True))
-    if visibility == "org_private":
+    if visibility == "personal":
+        # 个人库严格按 created_by 过滤；requesting_user_id 为空时 created_by == None
+        # 恒不匹配（个人模板 created_by 必然非空），天然返回空列表，不会越权浏览他人个人库
+        q = q.where(InstanceTemplate.visibility == "personal", InstanceTemplate.created_by == requesting_user_id)
+    elif visibility == "org_private":
         q = q.where(InstanceTemplate.visibility == "org_private", InstanceTemplate.org_id == org_id)
     elif visibility == "public":
         q = q.where(InstanceTemplate.visibility == "public")
@@ -320,13 +336,14 @@ async def create_template(
     db: AsyncSession,
     req: InstanceTemplateCreate,
     user_id: str,
-    org_id: str | None = None,
-    is_super_admin: bool = False,
 ) -> InstanceTemplateInfo:
+    # \u76f4\u63a5\u521b\u5efa\u7edf\u4e00\u843d\u4e2a\u4eba\u5e93\uff08\u5bf9\u9f50 /genes/manual \u7684\u4ea7\u54c1\u51b3\u7b56\uff1a\u7ec4\u7ec7/\u5e02\u573a\u5185\u5bb9\u4e00\u5f8b
+    # \u8d70 fork \u540c\u6b65\uff0c\u4e0d\u5141\u8bb8\u76f4\u63a5\u521b\u5efa\uff09\uff0c\u67e5\u91cd\u6309\u4e2a\u4eba\u5e93\u8303\u56f4\uff08\u540c\u4e00 slug \u4e0d\u540c\u7528\u6237\u53ef\u5e76\u5b58\uff09
     existing = await db.execute(
         select(InstanceTemplate).where(
             InstanceTemplate.slug == req.slug,
-            InstanceTemplate.org_id == org_id,
+            InstanceTemplate.org_id.is_(None),
+            InstanceTemplate.created_by == user_id,
             not_deleted(InstanceTemplate),
         )
     )
@@ -337,7 +354,6 @@ async def create_template(
     if not items_input and req.gene_slugs:
         items_input = [TemplateItemInput(type="gene", slug=s) for s in req.gene_slugs]
 
-    review_attrs = await _resolve_template_review_attrs(db, user_id=user_id, org_id=org_id, is_super_admin=is_super_admin)
     tpl = InstanceTemplate(
         name=req.name,
         slug=req.slug,
@@ -346,8 +362,10 @@ async def create_template(
         icon=req.icon,
         gene_slugs=json.dumps([i.slug for i in items_input if i.type == "gene"]) if items_input else "[]",
         created_by=user_id,
-        org_id=org_id,
-        **review_attrs,
+        org_id=None,
+        visibility="personal",
+        is_published=True,
+        review_status=None,
     )
     db.add(tpl)
     await db.flush()
@@ -371,7 +389,6 @@ async def create_from_instance(
     req: InstanceTemplateFromInstance,
     user_id: str,
     org_id: str | None = None,
-    is_super_admin: bool = False,
 ) -> InstanceTemplateInfo:
     inst = await db.execute(
         select(Instance).where(
@@ -383,10 +400,12 @@ async def create_from_instance(
     if not inst.scalar_one_or_none():
         raise NotFoundError("实例不存在")
 
+    # \u76f4\u63a5\u521b\u5efa\u7edf\u4e00\u843d\u4e2a\u4eba\u5e93\uff0c\u67e5\u91cd\u6309\u4e2a\u4eba\u5e93\u8303\u56f4\uff08\u540c\u4e00 slug \u4e0d\u540c\u7528\u6237\u53ef\u5e76\u5b58\uff09
     existing = await db.execute(
         select(InstanceTemplate).where(
             InstanceTemplate.slug == req.slug,
-            InstanceTemplate.org_id == org_id,
+            InstanceTemplate.org_id.is_(None),
+            InstanceTemplate.created_by == user_id,
             not_deleted(InstanceTemplate),
         )
     )
@@ -403,7 +422,6 @@ async def create_from_instance(
     )
     gene_slugs = [row[0] for row in ig_result.all()]
 
-    review_attrs = await _resolve_template_review_attrs(db, user_id=user_id, org_id=org_id, is_super_admin=is_super_admin)
     tpl = InstanceTemplate(
         name=req.name,
         slug=req.slug,
@@ -413,8 +431,10 @@ async def create_from_instance(
         gene_slugs=json.dumps(gene_slugs),
         source_instance_id=instance_id,
         created_by=user_id,
-        org_id=org_id,
-        **review_attrs,
+        org_id=None,
+        visibility="personal",
+        is_published=True,
+        review_status=None,
     )
     db.add(tpl)
     await db.flush()
@@ -429,6 +449,111 @@ async def create_from_instance(
     item_refs = await _resolve_item_refs(db, ti_list)
     genes = await _resolve_gene_refs(db, gene_slugs)
     return _template_to_info(tpl, genes, item_refs)
+
+
+async def fork_template_to_library(
+    db: AsyncSession,
+    source_template_id: str,
+    target: str,
+    *,
+    current_user,  # app.models.user.User —— 取 id / is_super_admin / current_org_id
+    org_id: str | None = None,
+) -> InstanceTemplateInfo:
+    """从任意 scope（personal / org / public）fork 一份模板到 personal / org / public 库。
+
+    对照 gene_service.fork_gene_to_library 的非 overwrite 分支：创建一份新副本，
+    原模板不受影响。目标 scope 内已有同名 slug 直接 ConflictError，不支持覆盖。
+
+    权限规则（current_user.is_super_admin=True 时全部放行）：
+      - 源是 personal：仅 source.created_by == current_user.id 可 fork
+      - 源是 org（org_private）：current_user 必须是该 org 的有效成员
+      - 源是 public：任意登录用户可 fork
+    """
+    source = (await db.execute(
+        select(InstanceTemplate).where(InstanceTemplate.id == source_template_id, not_deleted(InstanceTemplate))
+    )).scalar_one_or_none()
+    if not source:
+        raise NotFoundError("AI 员工模板不存在")
+
+    if not getattr(current_user, "is_super_admin", False):
+        if source.visibility == "personal":
+            if source.created_by != current_user.id:
+                raise ForbiddenError(
+                    message="仅本人可 fork 自己的个人模板",
+                    message_key="errors.instance_template.fork_personal_forbidden",
+                )
+        elif source.visibility == "org_private":
+            from app.models.org_membership import OrgMembership
+
+            membership = (await db.execute(
+                select(OrgMembership).where(
+                    OrgMembership.user_id == current_user.id,
+                    OrgMembership.org_id == source.org_id,
+                    OrgMembership.deleted_at.is_(None),
+                )
+            )).scalar_one_or_none()
+            if membership is None:
+                raise ForbiddenError(
+                    message="仅本组织成员可 fork 该组织模板",
+                    message_key="errors.instance_template.fork_org_forbidden",
+                )
+        # visibility == "public"：任意登录用户均可，无须额外校验
+
+    effective_org_id = org_id if org_id is not None else getattr(current_user, "current_org_id", None)
+    attrs = await _resolve_template_review_attrs(
+        db, target,
+        user_id=current_user.id,
+        org_id=effective_org_id,
+        is_super_admin=getattr(current_user, "is_super_admin", False),
+    )
+
+    # 查重必须按 visibility 一起判断：org_private 和 public fork 到同一个 org 时
+    # attrs["org_id"] 相同，仅按 org_id 查重会把两种不同 scope 的模板误判冲突。
+    # public 的唯一性是全平台范围（不按 org_id 限定）；personal 的唯一性按
+    # created_by 限定（不同用户各自的个人库互不冲突）——对齐 Gene 市场三态唯一索引。
+    dup_conditions = [InstanceTemplate.slug == source.slug, not_deleted(InstanceTemplate)]
+    if attrs["visibility"] == "public":
+        dup_conditions.append(InstanceTemplate.visibility == "public")
+    elif attrs["visibility"] == "personal":
+        dup_conditions.append(InstanceTemplate.visibility == "personal")
+        dup_conditions.append(InstanceTemplate.created_by == current_user.id)
+    else:
+        dup_conditions.append(InstanceTemplate.visibility == attrs["visibility"])
+        dup_conditions.append(InstanceTemplate.org_id == attrs["org_id"])
+    existing = await db.execute(select(InstanceTemplate).where(*dup_conditions))
+    if existing.scalar_one_or_none():
+        raise ConflictError(f"模板 slug '{source.slug}' 已存在")
+
+    fork = InstanceTemplate(
+        name=source.name,
+        slug=source.slug,
+        description=source.description,
+        short_description=source.short_description,
+        icon=source.icon,
+        gene_slugs=source.gene_slugs,
+        source_instance_id=source.source_instance_id,
+        created_by=current_user.id,
+        org_id=attrs["org_id"],
+        visibility=attrs["visibility"],
+        is_published=attrs["is_published"],
+        review_status=attrs["review_status"],
+    )
+    db.add(fork)
+    await db.flush()
+
+    source_items = await _get_template_items(db, source.id)
+    if source_items:
+        items_input = [TemplateItemInput(type=it.item_type, slug=it.item_slug) for it in source_items]
+        await _write_template_items(db, fork.id, items_input)
+
+    await db.commit()
+    await db.refresh(fork)
+
+    ti_list = await _get_template_items(db, fork.id)
+    item_refs = await _resolve_item_refs(db, ti_list)
+    gene_slugs = [r.slug for r in item_refs if r.type == "gene"]
+    genes = await _resolve_gene_refs(db, gene_slugs)
+    return _template_to_info(fork, genes, item_refs)
 
 
 async def update_template(

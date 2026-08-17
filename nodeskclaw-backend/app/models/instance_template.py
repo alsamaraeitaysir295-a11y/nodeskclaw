@@ -17,12 +17,30 @@ class TemplateItemType(str, Enum):
 class InstanceTemplate(BaseModel):
     __tablename__ = "instance_templates"
     __table_args__ = (
+        # 按 scope 分别对 slug 做唯一约束，对齐 Gene 三态唯一索引的做法
+        # （personal 按创建者、org 按组织、public 全平台唯一），避免同一个
+        # org_id 下 org_private 和 public 两份 fork 副本共用同一条 (slug, org_id)
+        # 唯一索引而互相冲突（public fork 也会把 org_id 落成操作者所在组织，
+        # 用于追溯背书方，因此不能简单靠 org_id 区分 scope）。
+        Index(
+            "uq_instance_templates_slug_personal_active",
+            "slug",
+            "created_by",
+            unique=True,
+            postgresql_where="deleted_at IS NULL AND visibility = 'personal'",
+        ),
         Index(
             "uq_instance_templates_slug_org_active",
             "slug",
             "org_id",
             unique=True,
-            postgresql_where="deleted_at IS NULL",
+            postgresql_where="deleted_at IS NULL AND visibility = 'org_private'",
+        ),
+        Index(
+            "uq_instance_templates_slug_public_active",
+            "slug",
+            unique=True,
+            postgresql_where="deleted_at IS NULL AND visibility = 'public'",
         ),
     )
 

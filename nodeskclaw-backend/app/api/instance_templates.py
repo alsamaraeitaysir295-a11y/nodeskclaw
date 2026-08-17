@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_org, get_db
+from app.core.exceptions import BadRequestError
 from app.core.security import get_current_user
 from app.core import hooks
 from app.models.user import User
@@ -14,6 +15,7 @@ from app.schemas.instance_template import (
     InstanceTemplateFromInstance,
     InstanceTemplateInfo,
     InstanceTemplateUpdate,
+    TemplateForkRequest,
 )
 from app.services import instance_template_service as svc
 
@@ -68,9 +70,9 @@ async def create_template(
     db: AsyncSession = Depends(get_db),
     org_info=Depends(get_current_org),
 ):
-    user, org = org_info
-    item = await svc.create_template(db, body, user_id=user.id, org_id=org.id, is_super_admin=user.is_super_admin)
-    await hooks.emit("operation_audit", action="instance_template.created", target_type="instance_template", target_id=item.id, actor_id=user.id, org_id=org.id)
+    user, _org = org_info
+    item = await svc.create_template(db, body, user_id=user.id)
+    await hooks.emit("operation_audit", action="instance_template.created", target_type="instance_template", target_id=item.id, actor_id=user.id, org_id=None)
     return ApiResponse(data=item.model_dump(mode="json"))
 
 
@@ -82,8 +84,8 @@ async def create_from_instance(
     org_info=Depends(get_current_org),
 ):
     user, org = org_info
-    item = await svc.create_from_instance(db, instance_id, body, user_id=user.id, org_id=org.id, is_super_admin=user.is_super_admin)
-    await hooks.emit("operation_audit", action="instance_template.created_from_instance", target_type="instance_template", target_id=item.id, actor_id=user.id, org_id=org.id, details={"source_instance_id": instance_id})
+    item = await svc.create_from_instance(db, instance_id, body, user_id=user.id, org_id=org.id)
+    await hooks.emit("operation_audit", action="instance_template.created_from_instance", target_type="instance_template", target_id=item.id, actor_id=user.id, org_id=None, details={"source_instance_id": instance_id})
     return ApiResponse(data=item.model_dump(mode="json"))
 
 
@@ -110,6 +112,32 @@ async def delete_template(
     result = await svc.delete_template(db, template_id, org.id)
     await hooks.emit("operation_audit", action="instance_template.deleted", target_type="instance_template", target_id=template_id, actor_id=user.id, org_id=org.id)
     return ApiResponse(data=result)
+
+
+@router.post("/instance-templates/{template_id}/fork", response_model=ApiResponse)
+async def fork_template(
+    template_id: str,
+    req: TemplateForkRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """fork 一份模板到 personal / org / public 库（三向支持）。
+
+    - target=personal：副本归属当前用户，无需审核
+    - target=org：副本归属当前组织，pending_owner 等组织 admin 审核
+    - target=public：副本 visibility=public，归属当前组织，pending_owner 等组织 admin 审核
+
+    权限校验由 service 层按源 scope 分支处理：
+      - 个人模板仅本人可 fork；组织模板仅本组成员可 fork；公共模板任意用户可 fork
+    """
+    if req.target in ("org", "public") and not current_user.current_org_id:
+        raise BadRequestError("fork 到组织 / 公共市场前需先加入组织")
+
+    item = await svc.fork_template_to_library(
+        db, template_id, req.target, current_user=current_user,
+    )
+    await hooks.emit("operation_audit", action="instance_template.forked", target_type="instance_template", target_id=item.id, actor_id=current_user.id, org_id=current_user.current_org_id, details={"source": template_id, "target": req.target})
+    return ApiResponse(data=item.model_dump(mode="json"))
 
 
 @router.get("/admin/instance-templates/pending-review")
