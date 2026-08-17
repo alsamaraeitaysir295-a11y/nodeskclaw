@@ -139,6 +139,7 @@ export interface TemplateInfo {
   use_count: number
   created_by?: string
   org_id?: string
+  visibility?: 'public' | 'org_private' | 'personal' | string
   review_status?: string
   created_at?: string
 }
@@ -528,6 +529,11 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  async function forkTemplate(templateId: string, target: 'personal' | 'org' | 'public'): Promise<TemplateInfo> {
+    const res = await api.post(`/instance-templates/${templateId}/fork`, { target })
+    return res.data.data
+  }
+
   // ── Admin ─────────────────────────────────────
 
   async function fetchGeneStats() {
@@ -619,6 +625,7 @@ export const useGeneStore = defineStore('gene', () => {
     createTemplateFromInstance,
     updateTemplate,
     deleteTemplate,
+    forkTemplate,
 
     fetchInstanceGenes,
     fetchInstanceSkills,

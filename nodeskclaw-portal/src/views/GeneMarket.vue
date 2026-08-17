@@ -420,6 +420,58 @@ function canForkFrom(gene: GeneItem): { personal: boolean; org: boolean; public:
   }
 }
 
+// 模板版 fork 权限判断：直接用 visibility 字段判源 scope，不用 org_id 是否为空做代理
+// （genes 那边 org_id 代理判断在 publish_gene_to_market 场景下失真，模板这边一开始就避开这个坑）
+function canForkFromTemplate(tpl: TemplateInfo): { personal: boolean; org: boolean; public: boolean } {
+  const me = authStore.user
+  const empty = { personal: false, org: false, public: false }
+  if (!me) return empty
+
+  const fromPersonal = tpl.visibility === 'personal'
+  const fromPublic = tpl.visibility === 'public'
+  const fromOrg = !fromPersonal && !fromPublic
+
+  const allowed =
+    me.is_super_admin ||
+    fromPublic ||
+    (fromPersonal && tpl.created_by === me.id) ||
+    (fromOrg && me.current_org_id === tpl.org_id)
+  if (!allowed) return empty
+
+  return {
+    personal: !fromPersonal,
+    org: !fromOrg && !!me.current_org_id,
+    public: !fromPublic && !!me.current_org_id,
+  }
+}
+
+const forkingTemplateId = ref<string | null>(null)
+async function onForkTemplate(tpl: TemplateInfo, target: 'personal' | 'org' | 'public') {
+  forkingTemplateId.value = forkKey(tpl.id, target)
+  try {
+    const forked = await store.forkTemplate(tpl.id, target)
+    const isApproved = forked?.review_status === 'approved'
+    let successKey: string
+    if (target === 'personal') {
+      successKey = 'template.forkToPersonalSuccess'
+    } else if (target === 'org') {
+      successKey = isApproved ? 'template.forkToOrgImmediate' : 'template.forkToOrgSuccess'
+    } else {
+      successKey = isApproved ? 'template.forkToPublicImmediate' : 'template.forkToPublicSuccess'
+    }
+    toast.success(t(successKey))
+    const visMatches =
+      (target === 'personal' && selectedVisibility.value === 'personal') ||
+      (target === 'org' && selectedVisibility.value === 'org_private') ||
+      (target === 'public' && selectedVisibility.value === 'public')
+    if (visMatches) await loadData()
+  } catch (e: unknown) {
+    toast.error(resolveApiErrorMessage(e, t('template.forkFailed')))
+  } finally {
+    forkingTemplateId.value = null
+  }
+}
+
 async function loadData() {
   if (viewMode.value === 'genes') {
     await store.fetchGenes({
@@ -740,6 +792,43 @@ function hasNativeTools(gene: GeneItem): boolean {
                     <Download class="w-3.5 h-3.5" />
                     {{ t('template.useCount', { count: tpl.use_count ?? 0 }) }}
                   </span>
+                </div>
+
+                <!-- fork 按钮组：根据源 scope + 当前用户权限决定显示哪些目标按钮 -->
+                <div
+                  v-if="canForkFromTemplate(tpl).personal || canForkFromTemplate(tpl).org || canForkFromTemplate(tpl).public"
+                  class="flex items-center gap-2 mt-3 pt-3 border-t border-border"
+                >
+                  <button
+                    v-if="canForkFromTemplate(tpl).personal"
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingTemplateId === forkKey(tpl.id, 'personal')"
+                    @click.stop="onForkTemplate(tpl, 'personal')"
+                  >
+                    <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'personal')" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('template.forkToPersonal') }}
+                  </button>
+                  <button
+                    v-if="canForkFromTemplate(tpl).org"
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingTemplateId === forkKey(tpl.id, 'org')"
+                    @click.stop="onForkTemplate(tpl, 'org')"
+                  >
+                    <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'org')" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('template.forkToOrg') }}
+                  </button>
+                  <button
+                    v-if="canForkFromTemplate(tpl).public"
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingTemplateId === forkKey(tpl.id, 'public')"
+                    @click.stop="onForkTemplate(tpl, 'public')"
+                  >
+                    <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'public')" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('template.forkToPublic') }}
+                  </button>
                 </div>
               </div>
               </template>
