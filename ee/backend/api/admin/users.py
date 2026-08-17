@@ -140,7 +140,19 @@ async def get_user(
             message="User not found",
         )
 
-    return ApiResponse[AdminUserInfo](data=AdminUserInfo.model_validate(u))
+    # 详情接口之前遗漏了 org_count 统计，字段默认值 0 导致详情页恒显示 0
+    org_count = (
+        await db.execute(
+            select(sa_func.count(OrgMembership.id)).where(
+                OrgMembership.user_id == u.id,
+                OrgMembership.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one()
+
+    info = AdminUserInfo.model_validate(u)
+    info.org_count = org_count
+    return ApiResponse[AdminUserInfo](data=info)
 
 
 @router.put("/{user_id}", response_model=ApiResponse[AdminUserInfo])
@@ -159,7 +171,17 @@ async def update_user(
     )
     await db.commit()
     await db.refresh(u)
-    return ApiResponse[AdminUserInfo](data=AdminUserInfo.model_validate(u))
+    org_count = (
+        await db.execute(
+            select(sa_func.count(OrgMembership.id)).where(
+                OrgMembership.user_id == u.id,
+                OrgMembership.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    info = AdminUserInfo.model_validate(u)
+    info.org_count = org_count
+    return ApiResponse[AdminUserInfo](data=info)
 
 
 @router.post("/{user_id}/reset-password", response_model=ApiResponse[dict])
