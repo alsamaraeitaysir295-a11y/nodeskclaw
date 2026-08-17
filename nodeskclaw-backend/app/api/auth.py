@@ -250,14 +250,19 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ):
     """登出（客户端清除 Token 即可，服务端写审计）。"""
+    # _write_auth_audit 内部会 commit，之后 current_user 的属性会过期，
+    # 异步会话里再访问会因同步懒加载触发 MissingGreenlet，故提前取出所需字段
+    user_id = current_user.id
+    user_email = current_user.email
+    org_id = current_user.current_org_id
     await _write_auth_audit(
         db,
         action=AdminAction.AUTH_LOGOUT,
-        actor_id=current_user.id,
-        actor_email=current_user.email,
+        actor_id=user_id,
+        actor_email=user_email,
         details={},
     )
-    await hooks.emit("operation_audit", action="auth.logout", target_type="user", target_id=current_user.id, actor_id=current_user.id, org_id=current_user.current_org_id, details={})
+    await hooks.emit("operation_audit", action="auth.logout", target_type="user", target_id=user_id, actor_id=user_id, org_id=org_id, details={})
     return ApiResponse(message="已登出")
 
 
