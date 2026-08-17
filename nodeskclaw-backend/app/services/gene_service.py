@@ -3350,9 +3350,16 @@ async def delete_user_gene(
 
     权限策略（任一满足即可）：
       1. 超管（current_user.is_super_admin == True）
-      2. 上传者本人，但仅限个人 scope（gene.org_id IS NULL 且 gene.created_by == current_user.id）
-      3. 组织/公共 scope（gene.org_id 非空）：当前组织的 admin（OrgMembership.role == OrgRole.admin）——
-         即使当前用户是原上传者，一旦 gene 落到组织/公共 scope 也不再享有上传者豁免
+      2. 上传者本人，但仅限个人 scope（gene.visibility == "personal" 且
+         gene.created_by == current_user.id）——注意不能只看 org_id 是否为空：
+         publish_gene_to_market() 把个人 gene 提升到 public 市场时只切
+         visibility，从不回填 org_id，若仍按 org_id 判断"个人"会让原上传者
+         在技能上了公共市场审核通过之后依然能单方面删除，绕过组织 admin 审核
+      3. 组织/公共 scope（visibility 非 personal）：当前组织的 admin
+         （OrgMembership.role == OrgRole.admin）——即使当前用户是原上传者，
+         一旦 gene 落到组织/公共 scope 也不再享有上传者豁免；若该 gene 又没有
+         org_id（如上述发布到市场后 org_id 仍为空的情况），则没有可委托的
+         组织，只能由超管删除
 
     删除策略：直接软删 gene 本身，并级联软删所有 active 的 InstanceGene 引用，
     使依赖该 gene 的 agent 实例也立即看不到该 skill；前端无需先卸载。
@@ -3378,9 +3385,9 @@ async def delete_user_gene(
     if current_user.is_super_admin:
         # 超管直接放行
         allowed = True
-    elif gene.org_id is None and gene.created_by and gene.created_by == current_user.id:
+    elif gene.visibility == "personal" and gene.created_by and gene.created_by == current_user.id:
         # 仅个人 scope：上传者本人可删除自己的技能。
-        # 组织/公共 scope（org_id 非空）一旦落地即为共享资源，即使是原上传者
+        # 组织/公共 scope 一旦落地即为共享资源，即使是原上传者
         # 也不能凭"曾经是上传者"绕过组织 admin 校验，必须落到下面的 membership 分支判断
         allowed = True
     elif gene.org_id:
@@ -3407,11 +3414,12 @@ async def delete_user_gene(
         )
 
     # ── 2.5. 个人 scope 已被 Agent 加载时拒绝删除 ─────────────────────────
-    # 判定：org_id 为空且 created_by 非空（即 target=personal 的归属规则）。
+    # 判定：visibility == "personal" 且 created_by 非空（与上面权限校验用
+    # 同一套判定，不用 org_id is None 作代理——理由同上）。
     # 若仍有 active InstanceGene 引用（deleted_at IS NULL），引导用户先在实例侧卸载，
     # 防止"个人技能被悄悄连根抹除"的非预期数据丢失。
     # 组织 / 公共 scope 不进入此分支，保留下方的级联软删行为。
-    is_personal_scope = gene.org_id is None and gene.created_by is not None
+    is_personal_scope = gene.visibility == "personal" and gene.created_by is not None
     if is_personal_scope:
         in_use_count = (await db.execute(
             select(func.count()).select_from(InstanceGene).where(
