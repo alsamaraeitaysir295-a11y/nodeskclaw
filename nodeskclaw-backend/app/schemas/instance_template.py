@@ -71,6 +71,7 @@ class InstanceTemplateInfo(BaseModel):
     use_count: int = 0
     created_by: str | None = None
     org_id: str | None = None
+    review_status: str | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}

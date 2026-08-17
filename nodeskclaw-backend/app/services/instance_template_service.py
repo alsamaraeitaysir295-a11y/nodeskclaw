@@ -6,9 +6,9 @@ import logging
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.base import not_deleted
-from app.models.gene import Gene, Genome, InstanceGene
+from app.models.gene import Gene, GeneReviewStatus, Genome, InstanceGene
 from app.models.instance import Instance
 from app.models.instance_template import InstanceTemplate, TemplateItem
 from app.schemas.instance_template import (
@@ -20,6 +20,7 @@ from app.schemas.instance_template import (
     TemplateItemInput,
     TemplateItemRef,
 )
+from app.services import gene_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,32 @@ def _can_read_template(tpl: InstanceTemplate, org_id: str | None) -> bool:
 
 def _can_manage_template(tpl: InstanceTemplate, org_id: str | None) -> bool:
     return tpl.org_id == org_id
+
+
+async def _resolve_template_review_attrs(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    org_id: str | None,
+    is_super_admin: bool,
+) -> dict:
+    """派生新建模板的 visibility/is_published/review_status。
+
+    与 gene_service.resolve_target_attrs 的 org 分支一致：归属组织，
+    默认需组织 operator/admin 审核通过才可见；上传者本身是该 org 的
+    admin 或平台超管时 bypass，直接 approved。org_id 为空（无组织上下文）
+    时没有"组织"可以审核，保持原有立即可用行为。
+    """
+    if not org_id:
+        return {"visibility": "public", "is_published": True, "review_status": None}
+    bypass = await gene_service.is_user_admin_of_org(
+        db, user_id=user_id, org_id=org_id, is_super_admin=is_super_admin,
+    )
+    return {
+        "visibility": "org_private",
+        "is_published": bypass,
+        "review_status": GeneReviewStatus.approved if bypass else GeneReviewStatus.pending_owner,
+    }
 
 
 async def _get_template_model(
@@ -186,6 +213,7 @@ def _template_to_info(
         use_count=tpl.use_count,
         created_by=tpl.created_by,
         org_id=tpl.org_id,
+        review_status=tpl.review_status,
         created_at=tpl.created_at,
     )
 
@@ -199,8 +227,14 @@ async def list_templates(
     featured_only: bool = False,
     page: int = 1,
     page_size: int = 20,
+    requesting_user_id: str | None = None,
 ) -> tuple[list[InstanceTemplateInfo], int]:
-    q = select(InstanceTemplate).where(not_deleted(InstanceTemplate), InstanceTemplate.is_published.is_(True))
+    q = select(InstanceTemplate).where(not_deleted(InstanceTemplate))
+    if requesting_user_id:
+        # 待审模板对其他人不可见，但创建者本人始终能看到自己上传的（含待审）
+        q = q.where(or_(InstanceTemplate.is_published.is_(True), InstanceTemplate.created_by == requesting_user_id))
+    else:
+        q = q.where(InstanceTemplate.is_published.is_(True))
     if visibility == "org_private":
         q = q.where(InstanceTemplate.visibility == "org_private", InstanceTemplate.org_id == org_id)
     elif visibility == "public":
@@ -287,6 +321,7 @@ async def create_template(
     req: InstanceTemplateCreate,
     user_id: str,
     org_id: str | None = None,
+    is_super_admin: bool = False,
 ) -> InstanceTemplateInfo:
     existing = await db.execute(
         select(InstanceTemplate).where(
@@ -302,6 +337,7 @@ async def create_template(
     if not items_input and req.gene_slugs:
         items_input = [TemplateItemInput(type="gene", slug=s) for s in req.gene_slugs]
 
+    review_attrs = await _resolve_template_review_attrs(db, user_id=user_id, org_id=org_id, is_super_admin=is_super_admin)
     tpl = InstanceTemplate(
         name=req.name,
         slug=req.slug,
@@ -311,6 +347,7 @@ async def create_template(
         gene_slugs=json.dumps([i.slug for i in items_input if i.type == "gene"]) if items_input else "[]",
         created_by=user_id,
         org_id=org_id,
+        **review_attrs,
     )
     db.add(tpl)
     await db.flush()
@@ -334,6 +371,7 @@ async def create_from_instance(
     req: InstanceTemplateFromInstance,
     user_id: str,
     org_id: str | None = None,
+    is_super_admin: bool = False,
 ) -> InstanceTemplateInfo:
     inst = await db.execute(
         select(Instance).where(
@@ -365,6 +403,7 @@ async def create_from_instance(
     )
     gene_slugs = [row[0] for row in ig_result.all()]
 
+    review_attrs = await _resolve_template_review_attrs(db, user_id=user_id, org_id=org_id, is_super_admin=is_super_admin)
     tpl = InstanceTemplate(
         name=req.name,
         slug=req.slug,
@@ -375,6 +414,7 @@ async def create_from_instance(
         source_instance_id=instance_id,
         created_by=user_id,
         org_id=org_id,
+        **review_attrs,
     )
     db.add(tpl)
     await db.flush()
@@ -442,3 +482,137 @@ async def increment_use_count(db: AsyncSession, template_id: str) -> None:
     if tpl:
         tpl.use_count = (tpl.use_count or 0) + 1
         await db.commit()
+
+
+async def review_instance_template(
+    db: AsyncSession,
+    template_id: str,
+    action: str,
+    reason: str | None = None,
+    *,
+    current_user=None,
+) -> dict:
+    """审核 AI 员工模板，权限模型与 gene_service.review_gene 一致。
+
+    权限：当前用户必须是该模板所属 org 的 OrgRole.operator/admin 或平台超管。
+    状态机：pending_owner → approved（is_published=True）；任意状态 → rejected。
+    """
+    from fastapi import HTTPException, status
+
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    result = await db.execute(select(InstanceTemplate).where(InstanceTemplate.id == template_id, not_deleted(InstanceTemplate)))
+    tpl = result.scalar_one_or_none()
+    if not tpl:
+        raise NotFoundError("模板不存在")
+
+    if current_user is not None:
+        allowed = False
+        if getattr(current_user, "is_super_admin", False):
+            allowed = True
+        elif tpl.org_id:
+            membership = (await db.execute(
+                select(OrgMembership).where(
+                    OrgMembership.user_id == current_user.id,
+                    OrgMembership.org_id == tpl.org_id,
+                    OrgMembership.role.in_([OrgRole.operator, OrgRole.admin]),
+                    OrgMembership.deleted_at.is_(None),
+                )
+            )).scalar_one_or_none()
+            if membership:
+                allowed = True
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": 40318,
+                    "message_key": "errors.instance_template.review_forbidden",
+                    "message": "您无权审核此模板（需该模板所属组织的管理员）",
+                },
+            )
+
+    if action == "approve":
+        if tpl.review_status in (GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin):
+            tpl.review_status = GeneReviewStatus.approved
+            tpl.is_published = True
+        else:
+            raise BadRequestError(f"当前审核状态 '{tpl.review_status}' 不可审核通过")
+    elif action == "reject":
+        tpl.review_status = GeneReviewStatus.rejected
+        tpl.is_published = False
+    else:
+        raise BadRequestError(f"未知审核动作: {action}")
+
+    await db.commit()
+    return {"review_status": tpl.review_status, "is_published": tpl.is_published}
+
+
+async def get_pending_review_instance_templates(db: AsyncSession, current_user=None) -> list[dict]:
+    """获取当前用户可审核的待审模板列表，权限模型与 gene_service.get_pending_review_genes 一致。"""
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    base_filter = InstanceTemplate.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin])
+
+    if current_user is not None and not getattr(current_user, "is_super_admin", False):
+        admin_orgs_result = await db.execute(
+            select(OrgMembership.org_id).where(
+                OrgMembership.user_id == current_user.id,
+                OrgMembership.role.in_([OrgRole.operator, OrgRole.admin]),
+                OrgMembership.deleted_at.is_(None),
+            )
+        )
+        admin_org_ids = [row[0] for row in admin_orgs_result.all()]
+        if not admin_org_ids:
+            return []
+        q = select(InstanceTemplate).where(base_filter, InstanceTemplate.org_id.in_(admin_org_ids), not_deleted(InstanceTemplate))
+    else:
+        # 超管（或未传 current_user 的兼容路径）→ 全部
+        q = select(InstanceTemplate).where(base_filter, not_deleted(InstanceTemplate))
+
+    rows = (await db.execute(q.order_by(InstanceTemplate.created_at.desc()))).scalars().all()
+    items = [
+        {
+            "id": tpl.id,
+            "name": tpl.name,
+            "slug": tpl.slug,
+            "visibility": tpl.visibility,
+            "review_status": tpl.review_status,
+            "created_by": tpl.created_by,
+            "org_id": tpl.org_id,
+            "created_at": tpl.created_at,
+        }
+        for tpl in rows
+    ]
+    return await _attach_uploader_identity(db, items)
+
+
+async def _attach_uploader_identity(db: AsyncSession, items: list[dict]) -> list[dict]:
+    """批量给模板 dict 注入 created_by_name / created_by_email，避免审核列表裸显 UUID。
+
+    与 gene_service._attach_uploader_identity / org_join_request_service._attach_identity
+    是同一套约定的独立实现（本仓库里各域各自维护一份，不跨域互相 import 私有函数）。
+    """
+    if not items:
+        return items
+
+    user_ids = {it.get("created_by") for it in items if it.get("created_by")}
+    if not user_ids:
+        return items
+
+    from app.models.user import User
+
+    rows = (await db.execute(
+        select(User.id, User.name, User.email).where(User.id.in_(user_ids))
+    )).all()
+    by_id = {row[0]: (row[1], row[2]) for row in rows}
+
+    for it in items:
+        uid = it.get("created_by")
+        if uid and uid in by_id:
+            name, email = by_id[uid]
+            it["created_by_name"] = name
+            it["created_by_email"] = email
+        else:
+            it["created_by_name"] = None
+            it["created_by_email"] = None
+    return items

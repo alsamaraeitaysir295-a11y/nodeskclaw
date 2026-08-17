@@ -51,6 +51,8 @@ class InstanceTemplate(BaseModel):
         String(16), default=ContentVisibility.public, nullable=False,
         server_default="public",
     )
+    # 待审 / 已批准 / 已拒绝；None 视同 approved（存量数据兼容，参照 Gene 的既有约定）
+    review_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class TemplateItem(BaseModel):
