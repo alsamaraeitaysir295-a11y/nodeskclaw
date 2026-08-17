@@ -121,6 +121,73 @@
       </div>
     </div>
 
+    <!-- AI 员工模板审核 Tab 内容 -->
+    <div v-else-if="activeTab === 'templates'" class="space-y-4">
+      <div v-if="loadingTemplates" class="text-center py-12 text-sm text-muted-foreground">
+        {{ t('common.loading') }}
+      </div>
+      <div
+        v-else-if="pendingTemplates.length === 0"
+        class="text-center py-12 text-sm text-muted-foreground border border-dashed rounded-lg"
+      >
+        {{ t('approvals.empty') }}
+      </div>
+      <div v-else class="border rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-muted/50">
+            <tr class="text-left">
+              <th class="px-4 py-2 font-medium">{{ t('approvals.columnName') }}</th>
+              <th class="px-4 py-2 font-medium">{{ t('approvals.columnScope') }}</th>
+              <th class="px-4 py-2 font-medium">{{ t('approvals.columnUploader') }}</th>
+              <th class="px-4 py-2 font-medium">{{ t('approvals.columnSubmittedAt') }}</th>
+              <th class="px-4 py-2 font-medium text-right">{{ t('approvals.columnActions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="tpl in pendingTemplates"
+              :key="tpl.id"
+              class="border-t hover:bg-muted/30"
+            >
+              <td class="px-4 py-3">
+                <div class="font-medium">{{ tpl.name }}</div>
+                <div class="text-xs text-muted-foreground">{{ tpl.slug }}</div>
+              </td>
+              <td class="px-4 py-3">
+                <span :class="scopeBadgeClass(tpl.visibility)">
+                  {{ scopeLabel(tpl.visibility) }}
+                </span>
+              </td>
+              <td class="px-4 py-3 text-muted-foreground">
+                {{ templateUploaderLabel(tpl) }}
+              </td>
+              <td class="px-4 py-3 text-muted-foreground">
+                {{ formatDate(tpl.created_at) }}
+              </td>
+              <td class="px-4 py-3 text-right space-x-2">
+                <button
+                  class="inline-flex items-center gap-1 px-3 py-1 text-xs rounded border border-green-500 text-green-700 hover:bg-green-50 disabled:opacity-50"
+                  :disabled="reviewingTemplateId === tpl.id"
+                  @click="onReviewTemplate(tpl, 'approve')"
+                >
+                  <Check class="w-3 h-3" />
+                  {{ t('approvals.approve') }}
+                </button>
+                <button
+                  class="inline-flex items-center gap-1 px-3 py-1 text-xs rounded border border-red-500 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  :disabled="reviewingTemplateId === tpl.id"
+                  @click="onReviewTemplate(tpl, 'reject')"
+                >
+                  <X class="w-3 h-3" />
+                  {{ t('approvals.reject') }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- 加入组织审核 Tab 内容 -->
     <div v-else-if="activeTab === 'joinRequests'" class="space-y-4">
       <div v-if="loadingJoin" class="text-center py-12 text-sm text-muted-foreground">
@@ -307,8 +374,8 @@ const toast = useToast()
 const authStore = useAuthStore()
 const { isEnabled: hasMultiOrg } = useFeature('multi_org')
 
-// 五类申请 Tab：skills 默认启用；joinRequests / leaveRequests 受 multi_org 控制，且仅组织 admin/超管可见；其余暂占位
-type TabKey = 'skills' | 'joinRequests' | 'leaveRequests' | 'account' | 'feature'
+// 五类申请 Tab：skills / templates 默认启用；joinRequests / leaveRequests 受 multi_org 控制，且仅组织 admin/超管可见；其余暂占位
+type TabKey = 'skills' | 'templates' | 'joinRequests' | 'leaveRequests' | 'account' | 'feature'
 interface TabDef {
   key: TabKey
   labelKey: string
@@ -318,6 +385,7 @@ interface TabDef {
 }
 const allTabs: TabDef[] = [
   { key: 'skills', labelKey: 'approvals.tabSkills', disabled: false },
+  { key: 'templates', labelKey: 'approvals.tabTemplates', disabled: false },
   { key: 'joinRequests', labelKey: 'approvals.tabJoinRequests', disabled: false, requireFeature: 'multi_org', requireOrgAdmin: true },
   { key: 'leaveRequests', labelKey: 'approvals.tabLeaveRequests', disabled: false, requireFeature: 'multi_org', requireOrgAdmin: true },
   { key: 'account', labelKey: 'approvals.tabAccount', disabled: true },
@@ -371,6 +439,55 @@ async function onReview(gene: GeneItem, action: 'approve' | 'reject') {
   } finally {
     reviewingId.value = null
   }
+}
+
+// === AI 员工模板审核 =====================================================
+interface PendingTemplateItem {
+  id: string
+  name: string
+  slug: string
+  visibility?: string
+  created_by?: string | null
+  created_by_name?: string | null
+  created_by_email?: string | null
+  created_at?: string
+}
+const pendingTemplates = ref<PendingTemplateItem[]>([])
+const loadingTemplates = ref(false)
+const reviewingTemplateId = ref<string | null>(null)
+
+async function loadPendingTemplates() {
+  loadingTemplates.value = true
+  try {
+    const data = await store.fetchPendingReviewTemplates()
+    pendingTemplates.value = (data as PendingTemplateItem[]) ?? []
+  } catch {
+    toast.error(t('approvals.loadFailed'))
+  } finally {
+    loadingTemplates.value = false
+  }
+}
+
+async function onReviewTemplate(tpl: PendingTemplateItem, action: 'approve' | 'reject') {
+  reviewingTemplateId.value = tpl.id
+  try {
+    await store.reviewTemplate(tpl.id, action)
+    pendingTemplates.value = pendingTemplates.value.filter((it) => it.id !== tpl.id)
+    toast.success(
+      action === 'approve' ? t('approvals.approveSuccess') : t('approvals.rejectSuccess'),
+    )
+  } catch {
+    toast.error(t('approvals.actionFailed'))
+  } finally {
+    reviewingTemplateId.value = null
+  }
+}
+
+function templateUploaderLabel(tpl: PendingTemplateItem): string {
+  if (tpl.created_by_name) return tpl.created_by_name
+  if (tpl.created_by_email) return tpl.created_by_email
+  if (tpl.created_by) return tpl.created_by.slice(0, 8) + '…'
+  return '-'
 }
 
 // === 组织加入审核 ====================================================
@@ -509,7 +626,7 @@ function formatDate(s?: string): string {
 }
 
 onMounted(async () => {
-  // 三个 Tab 数据并行预拉取，切换体感更顺
-  await Promise.all([loadPending(), loadPendingJoin(), loadPendingLeave()])
+  // 四个 Tab 数据并行预拉取，切换体感更顺
+  await Promise.all([loadPending(), loadPendingTemplates(), loadPendingJoin(), loadPendingLeave()])
 })
 </script>

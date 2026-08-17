@@ -1212,6 +1212,7 @@ const zhCN = {
     title: "申请审核中心",
     subtitle: "处理用户上传至组织 / 公共市场的技能基因，以及后续账号、功能模块开放申请。",
     tabSkills: "技能审核",
+    tabTemplates: "AI 员工模板",
     tabAccount: "账号修改",
     tabFeature: "功能开放",
     comingSoon: "即将上线",

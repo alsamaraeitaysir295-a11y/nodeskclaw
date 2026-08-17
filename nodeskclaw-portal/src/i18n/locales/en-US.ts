@@ -1209,6 +1209,7 @@ const enUS = {
     title: "Approval Center",
     subtitle: "Review skill genes submitted to your organization or the public market, and future account / feature requests.",
     tabSkills: "Skill Reviews",
+    tabTemplates: "AI Employee Templates",
     tabAccount: "Account Requests",
     tabFeature: "Feature Requests",
     comingSoon: "coming soon",

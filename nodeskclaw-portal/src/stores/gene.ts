@@ -139,6 +139,7 @@ export interface TemplateInfo {
   use_count: number
   created_by?: string
   org_id?: string
+  review_status?: string
   created_at?: string
 }
 
@@ -568,6 +569,16 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  async function fetchPendingReviewTemplates() {
+    const res = await api.get('/admin/instance-templates/pending-review')
+    return res.data.data || []
+  }
+
+  async function reviewTemplate(templateId: string, action: string, reason?: string) {
+    const res = await api.put(`/admin/instance-templates/${templateId}/review`, { action, reason })
+    return res.data.data
+  }
+
   return {
     genes,
     genomes,
@@ -631,5 +642,7 @@ export const useGeneStore = defineStore('gene', () => {
     fetchCoInstall,
     reviewGene,
     reviewGeneOverwriteSubmission,
+    fetchPendingReviewTemplates,
+    reviewTemplate,
   }
 })
