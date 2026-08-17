@@ -79,6 +79,8 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout() {
     try {
       await api.post('/auth/logout')
+    } catch {
+      // 登出接口失败（token 已过期、网络抖动等）不应阻塞前端清理与跳转
     } finally {
       clearAuth()
     }
