@@ -729,7 +729,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col bg-background">
+  <div class="h-[calc(100vh-3.5rem)] flex flex-col bg-background">
     <!-- 加载中 -->
     <div v-if="instanceLoading || workspaceLoading" class="flex-1 flex items-center justify-center">
       <Loader2 class="w-6 h-6 animate-spin text-muted-foreground" />
