@@ -204,6 +204,7 @@ class ChatMessageRequest(BaseModel):
     message: str
     history: list[dict] = []
     conversation_id: str | None = None  # 私人对话 session ID
+    file_ids: list[str] | None = None
 
 
 class WorkspaceChatRequest(BaseModel):

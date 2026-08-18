@@ -275,10 +275,13 @@ async def download_file(
 
 
 async def list_files_for_instance(
-    instance_id: str, rel_path: str, db: AsyncSession,
+    instance_id: str, rel_path: str, db: AsyncSession, *, workspace_only: bool = False,
 ) -> dict:
     instance = await _get_running_instance(instance_id, db)
-    safe_path = _validate_path(rel_path, get_allowed_root(instance.runtime))
+    allowed_root = get_allowed_root(instance.runtime)
+    if workspace_only:
+        allowed_root = f"{allowed_root}/workspace"
+    safe_path = _validate_path(rel_path, allowed_root)
 
     try:
         async with remote_fs(instance, db) as fs:
@@ -313,10 +316,13 @@ async def list_files_for_instance(
 
 
 async def read_file_for_instance(
-    instance_id: str, rel_path: str, db: AsyncSession,
+    instance_id: str, rel_path: str, db: AsyncSession, *, workspace_only: bool = False,
 ) -> dict:
     instance = await _get_running_instance(instance_id, db)
-    safe_path = _validate_path(rel_path, get_allowed_root(instance.runtime))
+    allowed_root = get_allowed_root(instance.runtime)
+    if workspace_only:
+        allowed_root = f"{allowed_root}/workspace"
+    safe_path = _validate_path(rel_path, allowed_root)
 
     try:
         async with remote_fs(instance, db) as fs:
@@ -352,11 +358,14 @@ async def read_file_for_instance(
 
 
 async def download_file_for_instance(
-    instance_id: str, rel_path: str, db: AsyncSession,
+    instance_id: str, rel_path: str, db: AsyncSession, *, workspace_only: bool = False,
 ) -> tuple[bytes, str, str]:
     """Return (raw_bytes, filename, mime_type) for download."""
     instance = await _get_running_instance(instance_id, db)
-    safe_path = _validate_path(rel_path, get_allowed_root(instance.runtime))
+    allowed_root = get_allowed_root(instance.runtime)
+    if workspace_only:
+        allowed_root = f"{allowed_root}/workspace"
+    safe_path = _validate_path(rel_path, allowed_root)
 
     try:
         async with remote_fs(instance, db) as fs:

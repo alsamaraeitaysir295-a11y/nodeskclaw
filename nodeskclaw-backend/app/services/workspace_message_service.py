@@ -209,6 +209,28 @@ async def clear_workspace_messages(
     return result.rowcount or 0
 
 
+def format_attachment_lines(attachments: list[dict] | None) -> str:
+    """把消息的 attachments 列表格式化成 `[附件N: name (size), file_id: XXX]` 提示行。
+
+    供 build_context_prompt 格式化历史消息、以及私聊 agent_chat 把当前这一轮
+    的附件直接拼进发给 Agent 的消息内容里共用，避免重复实现。
+    """
+    if not attachments:
+        return ""
+    lines = []
+    for idx, att in enumerate(attachments, 1):
+        size = att.get("size", 0)
+        if size >= 1024 * 1024:
+            size_str = f"{size / (1024 * 1024):.1f}MB"
+        elif size >= 1024:
+            size_str = f"{size / 1024:.0f}KB"
+        else:
+            size_str = f"{size}B"
+        fid = att.get("id", "")
+        lines.append(f"\n  [附件{idx}: {att.get('name', '?')} ({size_str}), file_id: {fid}]")
+    return "".join(lines)
+
+
 def build_context_prompt(
     workspace_name: str,
     agent_display_name: str,
@@ -238,17 +260,7 @@ def build_context_prompt(
         for m in all_messages[-30:]:
             ts = m.created_at.strftime("%H:%M") if isinstance(m.created_at, datetime) else ""
             line = f"[{ts} {m.sender_name}]: {m.content}"
-            if m.attachments:
-                for idx, att in enumerate(m.attachments, 1):
-                    size = att.get("size", 0)
-                    if size >= 1024 * 1024:
-                        size_str = f"{size / (1024 * 1024):.1f}MB"
-                    elif size >= 1024:
-                        size_str = f"{size / 1024:.0f}KB"
-                    else:
-                        size_str = f"{size}B"
-                    fid = att.get("id", "")
-                    line += f"\n  [附件{idx}: {att.get('name', '?')} ({size_str}), file_id: {fid}]"
+            line += format_attachment_lines(m.attachments)
             msg_lines.append(line)
         messages_text = "\n".join(msg_lines)
     else:

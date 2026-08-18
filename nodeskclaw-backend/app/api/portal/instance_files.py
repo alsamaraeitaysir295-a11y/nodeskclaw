@@ -100,3 +100,64 @@ async def download_file(
             "Content-Length": str(len(raw_bytes)),
         },
     )
+
+
+# ── 窄作用域端点：仅浏览/下载 workspace 子目录，权限降到 viewer ──────────────
+# 供聊天页"生成的文件"面板使用，不暴露 .openclaw 根下 agents/canvas/cron/
+# extensions/skills 等运行时内部目录；仍然不做编辑（写入接口维持 admin-only）。
+
+
+@router.get("/{instance_id}/files/workspace", response_model=ApiResponse)
+async def list_workspace_files(
+    instance_id: str,
+    path: str = Query(default="", alias="path"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await instance_member_service.check_instance_access(
+        instance_id, current_user, InstanceRole.viewer, db
+    )
+    data = await enterprise_file_service.list_files_for_instance(
+        instance_id, path, db, workspace_only=True,
+    )
+    return ApiResponse(data=data)
+
+
+@router.get("/{instance_id}/files/workspace/download")
+async def download_workspace_file(
+    instance_id: str,
+    path: str = Query(..., alias="path"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await instance_member_service.check_instance_access(
+        instance_id, current_user, InstanceRole.viewer, db
+    )
+    raw_bytes, filename, mime_type = await enterprise_file_service.download_file_for_instance(
+        instance_id, path, db, workspace_only=True,
+    )
+    filename_encoded = quote(filename, safe="")
+    return Response(
+        content=raw_bytes,
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename_encoded}",
+            "Content-Length": str(len(raw_bytes)),
+        },
+    )
+
+
+@router.get("/{instance_id}/files/workspace/content", response_model=ApiResponse)
+async def read_workspace_file_content(
+    instance_id: str,
+    path: str = Query(..., alias="path"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await instance_member_service.check_instance_access(
+        instance_id, current_user, InstanceRole.viewer, db
+    )
+    data = await enterprise_file_service.read_file_for_instance(
+        instance_id, path, db, workspace_only=True,
+    )
+    return ApiResponse(data=data)

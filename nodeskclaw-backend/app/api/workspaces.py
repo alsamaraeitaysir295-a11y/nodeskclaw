@@ -1764,6 +1764,25 @@ async def agent_chat(
     )
     members = _build_members_list(ws_info, user)
 
+    # 解析本轮附件（对照 workspace_chat 的写法），仅限当前 workspace 内的文件
+    attachments_meta: list[dict] | None = None
+    if data.file_ids:
+        from app.models.workspace_file import WorkspaceFile
+
+        result = await db.execute(
+            sa_select(WorkspaceFile).where(
+                WorkspaceFile.id.in_(data.file_ids),
+                WorkspaceFile.workspace_id == workspace_id,
+                WorkspaceFile.deleted_at.is_(None),
+            )
+        )
+        attachment_files = list(result.scalars().all())
+        if attachment_files:
+            attachments_meta = [
+                {"id": f.id, "name": f.original_name, "size": f.file_size, "content_type": f.content_type}
+                for f in attachment_files
+            ]
+
     from app.services.corridor_router import get_reachable_names
     reachable = await get_reachable_names(workspace_id, instance_id, db)
 
@@ -1778,9 +1797,12 @@ async def agent_chat(
         reachable_names=reachable,
     )
 
+    # recent_messages 是 persist 当前消息之前查的，历史记录里不会带上本轮附件，
+    # 必须把附件提示直接拼进本轮发给 Agent 的消息内容，当轮就能看到
+    user_message_content = data.message + msg_service.format_attachment_lines(attachments_meta)
     messages = [
         {"role": "system", "content": context_prompt},
-        {"role": "user", "content": data.message},
+        {"role": "user", "content": user_message_content},
     ]
 
     from app.services.tunnel import tunnel_adapter
@@ -1797,6 +1819,7 @@ async def agent_chat(
             sender_id=str(getattr(user, "id", "")),
             sender_name=user_name,
             content=data.message,
+            attachments=attachments_meta,
             message_type="private",
             conversation_id=data.conversation_id,
         )

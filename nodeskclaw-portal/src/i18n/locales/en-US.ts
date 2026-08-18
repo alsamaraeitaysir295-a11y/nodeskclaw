@@ -922,6 +922,8 @@ const enUS = {
   },
   instanceChat: {
     loadFailed: "Failed to load AI employee info",
+    filesPanelTitle: "Generated Files",
+    filesTruncated: "{count} older files not shown",
     noWorkspaceTitle: "This AI employee hasn't joined any workspace",
     noWorkspaceDesc: "Add this AI employee to a workspace first before chatting with it",
     goToWorkspaces: "Go to Workspaces",

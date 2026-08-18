@@ -922,6 +922,8 @@ const zhCN = {
   },
   instanceChat: {
     loadFailed: "加载 AI 员工信息失败",
+    filesPanelTitle: "生成的文件",
+    filesTruncated: "还有 {count} 个更早的文件未显示",
     noWorkspaceTitle: "该 AI 员工尚未加入任何工作空间",
     noWorkspaceDesc: "需要先将 AI 员工添加到一个工作空间，才能与它对话",
     goToWorkspaces: "前往工作空间",
