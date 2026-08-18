@@ -627,18 +627,23 @@ function parseContentDispositionFilename(header: string | null): string | undefi
   return match ? match[1].trim() : undefined;
 }
 
-async function resolveUniqueFilePath(dir: string, filename: string): Promise<string> {
+async function writeFileUnique(dir: string, filename: string, buffer: Buffer): Promise<string> {
+  // 用独占创建（flag "wx"）代替"先查是否存在、再单独写入"的两步做法：
+  // check-then-write 中间有空隙，两个并发下载撞同名文件时都能通过存在性检查，
+  // 后写入的会悄悄覆盖先写入的。改成检查和写入合并成一步、由文件系统保证原子性，
+  // 撞名时捕获 EEXIST 换下一个候选名重试，从根上消除这个竞态。
   const ext = path.extname(filename);
   const base = path.basename(filename, ext);
   let candidate = path.join(dir, filename);
   let counter = 0;
   while (true) {
     try {
-      await fs.access(candidate);
+      await fs.writeFile(candidate, buffer, { flag: "wx" });
+      return candidate;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       counter++;
       candidate = path.join(dir, `${base}(${counter})${ext}`);
-    } catch {
-      return candidate;
     }
   }
 }
@@ -701,9 +706,8 @@ function createFileDownloadTool(cfg: ToolConfig): AnyAgentTool {
       const uploadsDir = path.join(workspaceDir, "uploads");
       await fs.mkdir(uploadsDir, { recursive: true });
 
-      const localPath = await resolveUniqueFilePath(uploadsDir, saveName);
       const buffer = Buffer.from(await res.arrayBuffer());
-      await fs.writeFile(localPath, buffer);
+      const localPath = await writeFileUnique(uploadsDir, saveName, buffer);
 
       return jsonResult({
         path: localPath,
