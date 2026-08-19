@@ -22,6 +22,7 @@ export const NODESKCLAW_TOOL_NAMES = [
   "nodeskclaw_chat_history",
   "nodeskclaw_shared_files",
   "nodeskclaw_knowledge_search",
+  "nodeskclaw_write_file",
 ] as const;
 
 function resolveToolConfig(config: OpenClawConfig, sessionWorkspaceId?: string): ToolConfig {
@@ -652,10 +653,12 @@ function createFileDownloadTool(cfg: ToolConfig): AnyAgentTool {
   return {
     name: "nodeskclaw_file_download",
     description:
-      "Download a chat attachment to the local workspace. " +
+      "Download a chat attachment and save it to the local workspace. " +
       "When a user sends a message with attachments, each attachment includes a file_id. " +
-      "Use this tool to download the file to the workspace uploads/ directory, " +
-      "then read it with normal file tools.",
+      "Text-like files (plain text, markdown, JSON, csv, code, etc.) have their content " +
+      "returned directly in the result — no follow-up read needed. Binary files (images, " +
+      "PDF, docx, etc.) are only saved to the workspace uploads/ directory; content is not " +
+      "returned inline.",
     parameters: {
       type: "object",
       properties: {
@@ -700,7 +703,10 @@ function createFileDownloadTool(cfg: ToolConfig): AnyAgentTool {
       const disposition = res.headers.get("content-disposition");
       const contentType = res.headers.get("content-type") || "application/octet-stream";
       const originalName = parseContentDispositionFilename(disposition) || "unnamed";
-      const saveName = (p.save_as as string) || originalName;
+      // save_as 只应该是文件名；模型有时会传完整路径（如 workspace/uploads/xxx.docx），
+      // 直接 path.join 会导致路径重复拼接（ENOENT）。用 basename 强制只取文件名部分，
+      // 顺带也挡掉 ../ 路径穿越。
+      const saveName = path.basename((p.save_as as string) || originalName);
 
       const workspaceDir = path.join(os.homedir(), ".openclaw", "workspace");
       const uploadsDir = path.join(workspaceDir, "uploads");
@@ -709,11 +715,90 @@ function createFileDownloadTool(cfg: ToolConfig): AnyAgentTool {
       const buffer = Buffer.from(await res.arrayBuffer());
       const localPath = await writeFileUnique(uploadsDir, saveName, buffer);
 
+      // read 等通用文件工具在 tools.allow 里被禁用了，AI 下载完之后没有别的
+      // 工具能把内容读出来。参照 nodeskclaw_shared_files 的 read_file 已经验证
+      // 过的做法：文本类文件直接把内容解码后带回工具结果，不用再指望后续 read。
+      const MAX_INLINE_BYTES = 262_144; // 256KB，超过就只落盘不内联，避免撑爆上下文
+      const isTextLike = /^text\/|^application\/(json|xml|yaml|x-yaml)$/.test(contentType)
+        || /\.(txt|md|json|csv|yml|yaml|log|xml|ts|js|tsx|jsx|py|sh|css|html|sql)$/i.test(saveName);
+      let content: string | null = null;
+      let truncated = false;
+      if (isTextLike && buffer.length <= MAX_INLINE_BYTES) {
+        content = buffer.toString("utf-8");
+      } else if (isTextLike) {
+        content = buffer.toString("utf-8", 0, MAX_INLINE_BYTES);
+        truncated = true;
+      }
+
       return jsonResult({
         path: localPath,
         name: saveName,
         size: buffer.length,
         content_type: contentType,
+        content,
+        truncated,
+      });
+    },
+  };
+}
+
+function createWriteFileTool(_cfg: ToolConfig): AnyAgentTool {
+  return {
+    name: "nodeskclaw_write_file",
+    description:
+      "Write text content to a file inside your own workspace directory " +
+      "(~/.openclaw/workspace/). Use this to save something you generated (a document, " +
+      "report, notes) as a real local file — it will show up in the workspace file listing. " +
+      "Only paths inside the workspace directory are allowed; this cannot write anywhere else " +
+      "on the filesystem.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Path relative to the workspace directory, e.g. \"report.md\" or " +
+            "\"documents/report.md\". Parent directories are created automatically.",
+        },
+        content: {
+          type: "string",
+          description: "Text content to write.",
+        },
+        append: {
+          type: "boolean",
+          description: "Append to the file instead of overwriting it (default: false).",
+        },
+      },
+      required: ["path", "content"],
+    },
+    execute: async (_toolCallId, args) => {
+      const p = args as Record<string, unknown>;
+      const relPath = p.path as string;
+      const content = p.content as string;
+      if (!relPath) return jsonResult({ error: "path is required" });
+      if (content === undefined || content === null) return jsonResult({ error: "content is required" });
+
+      const workspaceDir = path.join(os.homedir(), ".openclaw", "workspace");
+      const targetPath = path.resolve(workspaceDir, relPath);
+      // 只允许写在 workspace 目录内部，挡掉 ../ 之类的路径穿越
+      if (targetPath !== workspaceDir && !targetPath.startsWith(workspaceDir + path.sep)) {
+        return jsonResult({ error: "path must stay inside the workspace directory" });
+      }
+
+      try {
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        if (p.append) {
+          await fs.appendFile(targetPath, content, "utf-8");
+        } else {
+          await fs.writeFile(targetPath, content, "utf-8");
+        }
+      } catch (err) {
+        return jsonResult({ error: `Write failed: ${(err as Error).message}` });
+      }
+
+      return jsonResult({
+        path: targetPath,
+        size: Buffer.byteLength(content, "utf-8"),
       });
     },
   };
@@ -782,7 +867,9 @@ function createSharedFilesTool(cfg: ToolConfig): AnyAgentTool {
           ],
           description:
             "list_files: list files in a directory; " +
-            "upload_file: upload a local file to shared files (requires local_path); " +
+            "upload_file: upload a file to shared files — either an existing local file " +
+            "(local_path) or generated text content written directly (content), no local " +
+            "write step needed; " +
             "read_file: read file content (requires file_id); " +
             "delete_file: delete a file (requires file_id); " +
             "mkdir: create a directory (requires name); " +
@@ -790,7 +877,14 @@ function createSharedFilesTool(cfg: ToolConfig): AnyAgentTool {
         },
         local_path: {
           type: "string",
-          description: "Local file path to upload (for upload_file action).",
+          description: "Local file path to upload (for upload_file action). Use this or content, not both.",
+        },
+        content: {
+          type: "string",
+          description:
+            "Text content to upload directly as a new file (for upload_file action), e.g. a " +
+            "document you just wrote. Use this or local_path, not both — filename is required " +
+            "when using content.",
         },
         parent_path: {
           type: "string",
@@ -824,17 +918,30 @@ function createSharedFilesTool(cfg: ToolConfig): AnyAgentTool {
           );
         }
         case "upload_file": {
-          const localPath = p.local_path as string;
-          if (!localPath) return jsonResult({ error: "local_path is required" });
-
-          let fileData: Buffer;
-          try {
-            fileData = await fs.readFile(localPath);
-          } catch (err) {
-            return jsonResult({ error: `Cannot read file: ${(err as Error).message}` });
+          const localPath = p.local_path as string | undefined;
+          const inlineContent = p.content as string | undefined;
+          if (!localPath && inlineContent === undefined) {
+            return jsonResult({ error: "Either local_path or content is required" });
+          }
+          if (localPath && inlineContent !== undefined) {
+            return jsonResult({ error: "Provide only one of local_path or content, not both" });
+          }
+          if (inlineContent !== undefined && !p.filename) {
+            return jsonResult({ error: "filename is required when using content" });
           }
 
-          const fname = (p.filename as string) || path.basename(localPath);
+          let fileData: Buffer;
+          if (inlineContent !== undefined) {
+            fileData = Buffer.from(inlineContent, "utf-8");
+          } else {
+            try {
+              fileData = await fs.readFile(localPath as string);
+            } catch (err) {
+              return jsonResult({ error: `Cannot read file: ${(err as Error).message}` });
+            }
+          }
+
+          const fname = (p.filename as string) || path.basename(localPath as string);
           const parentPath = (p.parent_path as string) || "/";
           const boundary = `----FormBoundary${Date.now()}${Math.random().toString(36).slice(2)}`;
 
@@ -974,6 +1081,7 @@ export function createNoDeskClawTools(config: OpenClawConfig, sessionWorkspaceId
     createProposalsTool(cfg),
     createGeneDiscoveryTool(cfg),
     createFileDownloadTool(cfg),
+    createWriteFileTool(cfg),
     createChatHistoryTool(cfg),
     createSharedFilesTool(cfg),
     createKnowledgeSearchTool(cfg),

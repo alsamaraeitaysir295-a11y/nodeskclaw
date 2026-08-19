@@ -71,6 +71,7 @@ NODESKCLAW_TOOL_NAMES = (
     "nodeskclaw_chat_history",
     "nodeskclaw_shared_files",
     "nodeskclaw_knowledge_search",
+    "nodeskclaw_write_file",
 )
 
 
