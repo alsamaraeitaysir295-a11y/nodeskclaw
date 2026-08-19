@@ -138,14 +138,20 @@ async function fetchInstanceFiles() {
     )
     const listing = data.data as InstanceFileListing
     // 隐藏点号开头的目录/文件（.git、.openclaw 这类运行时内部状态，不是"生成的文件"）；
+    // 隐藏 AI 员工自带的人设/配置文件（每个实例创建时都会预置，不是对话中生成的）；
     // 剩下的目录始终保留（方便导航）；文件按修改时间过滤（仅显示近 24 小时内改动过的），
     // 免得人设/配置一类几乎不变的老文件把真正"新生成的文件"淹没掉
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000
+    const BUILTIN_FILE_NAMES = new Set([
+      'AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'IDENTITY.md',
+      'SOUL.md', 'TOOLS.md', 'USER.md', 'openclaw-workspace-state.json',
+    ])
+    const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
     const now = Date.now()
     const modTime = (item: InstanceFileItem) => (item.modified_at ? new Date(item.modified_at).getTime() : 0)
     const visible = listing.items
       .filter((item) => !item.name.startsWith('.'))
-      .filter((item) => item.is_dir || !item.modified_at || now - modTime(item) <= ONE_DAY_MS)
+      .filter((item) => item.is_dir || !BUILTIN_FILE_NAMES.has(item.name))
+      .filter((item) => item.is_dir || !item.modified_at || now - modTime(item) <= RECENT_WINDOW_MS)
     const dirs = visible.filter((item) => item.is_dir)
     const files = visible.filter((item) => !item.is_dir).sort((a, b) => modTime(b) - modTime(a))
     // 聊天次数上去之后同一时间窗内的文件也可能很多，再加个数量上限，
