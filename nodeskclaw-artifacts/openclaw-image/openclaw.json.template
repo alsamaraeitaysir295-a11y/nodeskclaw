@@ -22,22 +22,13 @@
     }
   },
 
-  // NoDeskClaw 赛博办公室 channel — 由 deploy_service 通过环境变量注入三个字段：
-  //   NODESKCLAW_API_URL    后端 REST 地址（e.g. http://host.docker.internal:4510/api/v1）
-  //   NODESKCLAW_INSTANCE_ID  本实例 ID
-  //   OPENCLAW_GATEWAY_TOKEN  与后端 Tunnel 握手用的认证 token（同 gateway.auth.token）
-  // 若任一字段为空，tunnel-client 会打印 "Missing config" 并跳过连接，不报错。
-  "channels": {
-    "nodeskclaw": {
-      "accounts": {
-        "default": {
-          "apiUrl": "${NODESKCLAW_API_URL}",
-          "instanceId": "${NODESKCLAW_INSTANCE_ID}",
-          "apiToken": "${OPENCLAW_GATEWAY_TOKEN}"
-        }
-      }
-    }
-  },
+  // NoDeskClaw 赛博办公室 channel 不在这里声明：channels.nodeskclaw 需要与
+  // plugins.entries.nodeskclaw（插件注册 + 文件部署）同时就位才是合法配置，
+  // 二者都由 deploy_nodeskclaw_channel_plugin() 在实例绑定工作空间时一次性写入
+  // openclaw.json（见 llm_config_service.py _inject_channel_config）。这里如果
+  // 提前写一个空账号占位符，OpenClaw 2026.6.11+ 会在插件就位前直接拒绝启动
+  // （channels.nodeskclaw: unknown channel id），旧版本能容忍但本质上也只是
+  // 无效占位符，未绑定工作空间前 tunnel-client 一样连不上。
 
   "tools": {
     "exec": {

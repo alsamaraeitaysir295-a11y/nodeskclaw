@@ -100,11 +100,14 @@ if [ -f "${CONFIG_FILE}" ]; then
     if (!exec.security) { exec.security = 'full'; changed = true; }
     if (!exec.ask) { exec.ask = 'off'; changed = true; }
     // 补全 nodeskclaw channel 配置（旧版 PVC 上的 openclaw.json 缺少此节）
-    // 三个环境变量由 deploy_service 在容器启动时注入
+    // 三个环境变量由 deploy_service 在容器启动时注入。仅在插件已注册
+    // （plugins.entries.nodeskclaw 存在，即已绑定过工作空间、真正部署过插件文件）
+    // 时才补全 channel 详情——插件还没就位时提前写 channels.nodeskclaw 会被
+    // OpenClaw 2026.6.11+ 判定为非法配置（unknown channel id），直接拒绝启动。
     const ndApiUrl = process.env.NODESKCLAW_API_URL || '';
     const ndInstanceId = process.env.NODESKCLAW_INSTANCE_ID || '';
     const ndToken = process.env.OPENCLAW_GATEWAY_TOKEN || '';
-    if (ndApiUrl || ndInstanceId || ndToken) {
+    if ((ndApiUrl || ndInstanceId || ndToken) && c.plugins?.entries?.nodeskclaw) {
       const channels = c.channels ?? (c.channels = {});
       const ndChannel = channels.nodeskclaw ?? (channels.nodeskclaw = {});
       const accounts = ndChannel.accounts ?? (ndChannel.accounts = {});
