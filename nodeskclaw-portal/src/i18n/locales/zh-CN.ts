@@ -734,6 +734,7 @@ const zhCN = {
     searchEmpty: "没有找到匹配消息",
     searchFrom: "开始时间",
     searchTo: "结束时间",
+    searchByTime: "按时间筛选",
     searchFailed: "搜索失败：{error}",
     slugCopied: "AI 员工标识已复制",
     collaborationTag: "协作消息",

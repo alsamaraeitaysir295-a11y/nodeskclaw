@@ -10,7 +10,7 @@ import { useWorkspaceStore, type GroupChatMessage, type AgentBrief, type FileAtt
 import FileAttachmentList from './FileAttachmentList.vue'
 import BaseTooltip from '@/components/shared/BaseTooltip.vue'
 import { useAuthStore } from '@/stores/auth'
-import { Send, Loader2, Bot, User, Users, AtSign, Slash, RotateCw, Trash2, Activity, XCircle, Copy, ThumbsUp, ThumbsDown, Paperclip, X, FileText, Search, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { Send, Loader2, Bot, User, Users, AtSign, Slash, RotateCw, Trash2, Activity, XCircle, Copy, ThumbsUp, ThumbsDown, Paperclip, X, FileText, Search, AlertTriangle, ChevronDown, ChevronRight, CalendarClock, ArrowRight } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import api from '@/services/api'
 import { resolveApiErrorMessage } from '@/i18n/error'
@@ -46,6 +46,9 @@ const messages = computed(() => {
 const chatSearch = ref('')
 const searchFrom = ref('')
 const searchTo = ref('')
+const dateFilterOpen = ref(false)
+const searchFromInput = ref<HTMLInputElement | null>(null)
+const searchToInput = ref<HTMLInputElement | null>(null)
 const searchedMessages = ref<GroupChatMessage[]>([])
 const searchLoading = ref(false)
 const searchError = ref('')
@@ -831,6 +834,19 @@ function clearSearchFilters() {
   searchTo.value = ''
 }
 
+// 原生 datetime-local 只有日历图标那一小块才会弹出选择面板，点其余区域只是把光标
+// 定位到某个日期段。用 showPicker() 让点击框内任意位置都能弹出面板，体验上更像
+// 点哪都有效。老浏览器没有这个 API 时静默忽略，不影响原生点击/输入照常工作。
+function openDateTimePicker(el: HTMLInputElement | null) {
+  if (el && typeof el.showPicker === 'function') {
+    try {
+      el.showPicker()
+    } catch {
+      // 部分浏览器要求必须是用户手势直接触发，静默忽略即可，原生点击行为仍然生效
+    }
+  }
+}
+
 watch(messages, () => {
   if (!searchActive.value) scrollToBottom()
 }, { deep: true })
@@ -888,41 +904,70 @@ function updateSuggestionIndex(state: SuggestionState, idx: number) {
 <template>
   <div class="flex flex-col flex-1 min-h-0">
     <div class="px-4 py-2 border-b border-border shrink-0 space-y-2">
-      <div class="relative">
-        <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-        <input
-          v-model="chatSearch"
-          class="w-full rounded-lg border border-border bg-muted pl-9 pr-9 py-2 text-sm outline-none focus:ring-1 focus:ring-primary/50"
-          :placeholder="t('chat.searchPlaceholder')"
-        />
+      <div class="flex items-center gap-1.5">
+        <div class="relative flex-1 min-w-0">
+          <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <input
+            v-model="chatSearch"
+            class="w-full rounded-lg border border-border bg-muted pl-9 pr-9 py-2 text-sm outline-none focus:ring-1 focus:ring-primary/50"
+            :placeholder="t('chat.searchPlaceholder')"
+          />
+          <button
+            v-if="chatSearch"
+            class="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            :title="t('chat.clearSearch')"
+            @click="chatSearch = ''"
+          >
+            <X class="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <button
+          class="shrink-0 p-2 rounded-lg border transition-colors"
+          :class="dateFilterOpen || searchFrom || searchTo
+            ? 'border-primary/40 bg-primary/10 text-primary'
+            : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'"
+          :title="t('chat.searchByTime')"
+          @click="dateFilterOpen = !dateFilterOpen"
+        >
+          <CalendarClock class="w-3.5 h-3.5" />
+        </button>
         <button
           v-if="searchActive"
-          class="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          class="shrink-0 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           :title="t('chat.clearSearch')"
           @click="clearSearchFilters"
         >
           <X class="w-3.5 h-3.5" />
         </button>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <label class="flex flex-col gap-1 text-xs text-muted-foreground">
-          <span>{{ t('chat.searchFrom') }}</span>
+      <div v-if="dateFilterOpen" class="flex items-center gap-2 rounded-lg border border-border bg-muted/60 px-2.5 py-1.5">
+        <div class="relative flex-1 min-w-0" @click="openDateTimePicker(searchFromInput)">
           <input
+            ref="searchFromInput"
             v-model="searchFrom"
             type="datetime-local"
-            class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary/50"
+            class="chat-datetime-input w-full bg-transparent text-sm text-foreground outline-none"
             :aria-label="t('chat.searchFrom')"
           />
-        </label>
-        <label class="flex flex-col gap-1 text-xs text-muted-foreground">
-          <span>{{ t('chat.searchTo') }}</span>
+          <span
+            v-if="!searchFrom"
+            class="pointer-events-none absolute inset-y-0 left-0 right-7 flex items-center bg-muted text-sm text-muted-foreground/60"
+          >{{ t('chat.searchFrom') }}</span>
+        </div>
+        <ArrowRight class="w-3.5 h-3.5 text-muted-foreground/60 shrink-0" />
+        <div class="relative flex-1 min-w-0" @click="openDateTimePicker(searchToInput)">
           <input
+            ref="searchToInput"
             v-model="searchTo"
             type="datetime-local"
-            class="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary/50"
+            class="chat-datetime-input w-full bg-transparent text-sm text-foreground outline-none"
             :aria-label="t('chat.searchTo')"
           />
-        </label>
+          <span
+            v-if="!searchTo"
+            class="pointer-events-none absolute inset-y-0 left-0 right-7 flex items-center bg-muted text-sm text-muted-foreground/60"
+          >{{ t('chat.searchTo') }}</span>
+        </div>
       </div>
       <div v-if="searchActive" class="text-xs text-muted-foreground">
         <template v-if="searchLoading">
@@ -1317,6 +1362,23 @@ function updateSuggestionIndex(state: SuggestionState, idx: number) {
   color: inherit;
   border-radius: 0.2rem;
   padding: 0 0.1rem;
+}
+
+/* 原生 datetime-local 控件默认的日历图标点击区域很小，放大 + 加内边距扩大实际可点范围 */
+.chat-datetime-input::-webkit-calendar-picker-indicator {
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0.35rem;
+  margin-right: -0.25rem;
+  cursor: pointer;
+  opacity: 0.6;
+  border-radius: 0.35rem;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.chat-datetime-input::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  background-color: hsl(var(--accent));
 }
 
 .slug-tag {

@@ -734,6 +734,7 @@ const enUS = {
     searchEmpty: "No matching messages found",
     searchFrom: "Start time",
     searchTo: "End time",
+    searchByTime: "Filter by time",
     searchFailed: "Search failed: {error}",
     slugCopied: "AI Employee slug copied",
     collaborationTag: "Collaboration",
