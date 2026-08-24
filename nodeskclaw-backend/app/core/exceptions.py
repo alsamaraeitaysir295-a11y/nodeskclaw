@@ -20,6 +20,7 @@ class AppException(Exception):
         message_key: str | None = None,
         error_code: int | None = None,
         message_params: dict[str, str] | None = None,
+        extra: dict[str, Any] | None = None,
     ):
         self.code = code
         self.error_code = error_code if error_code is not None else code
@@ -27,6 +28,10 @@ class AppException(Exception):
         self.message_key = message_key
         self.message_params = message_params
         self.status_code = status_code
+        # 透传额外响应字段（例：422 字段级错误 → field_errors）。
+        # 序列化时由 app_exception_handler 合并进顶层响应体，
+        # 避免 HTTPException 的 handler 抹掉非白名单 key。
+        self.extra = extra or {}
 
 
 class NotFoundError(AppException):
@@ -80,6 +85,24 @@ class ConflictError(AppException):
         )
 
 
+class TooManyRequestsError(AppException):
+    """通用 429 异常，外部 Agent 插件化接入（spec §9.5 / §6.2 step 1）使用此类型
+    上抛令牌桶耗尽的情况；HTTP 状态码固定 429，message_key 走 errors.external_agent.rate_limited
+    以便前端 i18n 提示。
+    """
+
+    def __init__(
+        self,
+        message: str = "调用频率超出限制，请稍后再试",
+        message_key: str = "errors.external_agent.rate_limited",
+        message_params: dict[str, str] | None = None,
+    ):
+        super().__init__(
+            code=42900, message=message, status_code=429,
+            message_key=message_key, message_params=message_params,
+        )
+
+
 class K8sError(AppException):
     def __init__(self, message: str = "K8s 操作失败", message_key: str = "errors.k8s.operation_failed"):
         super().__init__(code=50010, message=message, status_code=502, message_key=message_key)
@@ -97,6 +120,7 @@ HTTP_STATUS_DEFAULT_CODES: dict[int, int] = {
     404: 40400,
     409: 40900,
     422: 42200,
+    429: 42900,
     500: 50000,
     502: 50200,
     503: 50300,
@@ -140,6 +164,8 @@ def register_exception_handlers(app: FastAPI) -> None:
         }
         if exc.message_params:
             body["message_params"] = exc.message_params
+        if exc.extra:
+            body.update(exc.extra)
         return JSONResponse(status_code=exc.status_code, content=body)
 
     @app.exception_handler(HTTPException)
