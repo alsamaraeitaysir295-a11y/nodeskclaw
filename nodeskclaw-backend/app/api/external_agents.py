@@ -38,6 +38,7 @@ from app.schemas.external_agent import (
     ExternalAgentFunctionCreate,
     ExternalAgentFunctionResponse,
     ExternalAgentFunctionUpdate,
+    ExternalAgentInvocationResponse,
     ExternalAgentResponse,
     ExternalAgentUpdate,
     MessageResponse,
@@ -47,6 +48,7 @@ from app.schemas.external_agent import (
 )
 from app.services import external_agent_adapter, external_agent_service
 from app.services import external_agent_chat_service
+from app.services import external_agent_invocation_service
 from app.services import external_agent_rate_limit
 from app.services import openapi_import_service
 from app.services.external_agent_ssrf import (
@@ -703,6 +705,14 @@ async def invoke_function(
             extra={"field_errors": exc.field_errors},
         )
     except _Unreachable503 as exc:
+        # 不可达也是一次真实发生的调用尝试，落历史（success=false）供用户回看
+        await external_agent_invocation_service.record_invocation(
+            agent_id=agent_id, org_id=org.id, user_id=str(user.id),
+            function_id=func.id, function_name=func.name,
+            params=submit_params,
+            result={"success": False, "error": exc.message},
+            db=db,
+        )
         raise HTTPException(
             status_code=503,
             detail={
@@ -712,6 +722,14 @@ async def invoke_function(
                 "message": exc.message,
             },
         )
+
+    # 成功 / 上游非 2xx（success:false，HTTP 200）都落一条调用历史；
+    # 422 参数校验失败未发起外部调用，不记录。
+    await external_agent_invocation_service.record_invocation(
+        agent_id=agent_id, org_id=org.id, user_id=str(user.id),
+        function_id=func.id, function_name=func.name,
+        params=submit_params, result=result, db=db,
+    )
 
     if result.get("success") is False:
         return ApiResponse(data={
@@ -783,6 +801,43 @@ async def upload_function_file(
         org_id=org.id,
     )
     return ApiResponse(data=result)
+
+
+# ── 调用历史（tool 型插件，用户侧，spec §6.2 延伸）──────────────────────────
+
+
+@router.get(
+    "/{agent_id}/invocations",
+    response_model=ApiResponse[list[ExternalAgentInvocationResponse]],
+)
+async def list_my_invocations(
+    agent_id: str,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(get_current_org),
+):
+    """列出当前用户在指定插件下的调用历史（普通用户可见自己的）。
+
+    返回最近 N 条调用记录（按 created_at 倒序），包含：
+    - function_name / params_summary / success / upstream_status / latency_ms / created_at
+    - result_data：完整 invoke 响应（50KB 截断），点击历史项可重放完整结果
+
+    安全：强制 (agent_id, org_id, user_id) 过滤——agent 归属组织校验（跨 org 404），
+    记录按 user_id 过滤（用户只能看到自己的，无跨用户泄露面）。
+    仅 tool 型插件会有记录（invoke 端点写入）；chat 型 agent 恒返回空列表。
+    """
+    user, org = auth
+    await external_agent_service.get_external_agent(agent_id=agent_id, org_id=org.id, db=db)
+    rows = await external_agent_invocation_service.list_invocations(
+        agent_id=agent_id,
+        org_id=org.id,
+        user_id=str(user.id),
+        limit=limit,
+        db=db,
+    )
+    return ApiResponse(
+        data=[ExternalAgentInvocationResponse.model_validate(r) for r in rows]
+    )
 
 
 # ── OpenAPI 导入（spec §7.1 / Task 6）───────────────────────────────────────────
@@ -1574,6 +1629,14 @@ async def invoke_plugin(
             extra={"field_errors": exc.field_errors},
         )
     except _Unreachable503 as exc:
+        # 不可达也是一次真实发生的调用尝试，落历史（success=false）供用户回看
+        await external_agent_invocation_service.record_invocation(
+            agent_id=agent_id, org_id=org.id, user_id=str(user.id),
+            function_id=func.id, function_name=func.name,
+            params=submit_params,
+            result={"success": False, "error": exc.message},
+            db=db,
+        )
         raise HTTPException(
             status_code=503,
             detail={
@@ -1583,6 +1646,14 @@ async def invoke_plugin(
                 "message": exc.message,
             },
         )
+
+    # 成功 / 上游非 2xx（success:false，HTTP 200）都落一条调用历史（function 级
+    # invoke 路径同款）；422 参数校验失败未发起外部调用，不记录。
+    await external_agent_invocation_service.record_invocation(
+        agent_id=agent_id, org_id=org.id, user_id=str(user.id),
+        function_id=func.id, function_name=func.name,
+        params=submit_params, result=result, db=db,
+    )
 
     # 上游非 2xx 在 invoke_tool 内部已包成 success:false，这里再统一把"上游失败"
     # 用 message_key 透传给前端，方便 UI 提示（i18n）。

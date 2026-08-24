@@ -15,6 +15,8 @@
  * - 提交 POST /functions/{id}/invoke；文件字段先 POST /functions/{id}/files 拿 file_id 再传引用。
  * - 422 字段级错误回显到对应控件下方；外部错误（含 success=false）展示 + 重试按钮。
  * - 成功结果交给 PluginResult.vue 渲染（表格 / JSON 树二选一）。
+ * - 调用历史（结果区下方可折叠卡片）：GET /{id}/invocations 拉当前用户最近 10 条，
+ *   点击条目用存档的 result_data 经 PluginResult 重放完整结果（agent 级，跨 function）。
  */
 
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -22,8 +24,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   Bot,
+  ChevronDown,
   ChevronLeft,
+  ChevronUp,
   CircleAlert,
+  Clock,
   FileText,
   Loader2,
   RefreshCw,
@@ -36,6 +41,7 @@ import {
   externalAgentFunctionApi,
   type ExternalAgentFunction,
   type ExternalAgentFunctionForm,
+  type InvocationHistoryItem,
   type ToolForm,
   type ToolInputField,
   type ToolInputSchema,
@@ -138,9 +144,59 @@ const fileState = reactive<
 const submitting = ref(false)
 const response = ref<ToolInvokeResponse | null>(null)
 
-// ── 初始化：先拉 function 列表，再选默认 + 拉表单 ─────────────────────────────
+// ── 调用历史（仅本人可见，agent 级：覆盖该插件全部 function） ─────────────────
+const history = ref<InvocationHistoryItem[]>([])
+const historyLoading = ref(false)
+const historyError = ref<string | null>(null)
+const historyOpen = ref(true)
+const expandedHistoryId = ref<string | null>(null)
+
+async function loadHistory() {
+  historyLoading.value = true
+  historyError.value = null
+  try {
+    history.value = await externalAgentFunctionApi.listInvocations(agentId, 10)
+  } catch {
+    // 历史加载失败不打断表单主流程，只在区块内提示
+    historyError.value = t('pluginForm.history.loadFailed')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function toggleHistoryItem(id: string) {
+  expandedHistoryId.value = expandedHistoryId.value === id ? null : id
+}
+
+/** 历史项的完整响应（result_data 即 invoke 响应），交给 PluginResult 重放。 */
+function historyResponse(item: InvocationHistoryItem): ToolInvokeResponse | null {
+  return (item.result_data as unknown as ToolInvokeResponse) ?? null
+}
+
+function historyDisplay(item: InvocationHistoryItem): 'table' | 'json' | 'text' {
+  const d = item.result_data?.display
+  return d === 'table' || d === 'text' ? d : 'json'
+}
+
+function historyItemsPath(item: InvocationHistoryItem): string | null {
+  const p = item.result_data?.items_path
+  return typeof p === 'string' ? p : null
+}
+
+function formatHistoryTime(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+}
+
+function truncateSummary(text: string | null, max = 120): string {
+  if (!text) return ''
+  return text.length > max ? text.slice(0, max) + '...' : text
+}
+
+// ── 初始化：先拉 function 列表，再选默认 + 拉表单；历史并行加载 ───────────────
 onMounted(async () => {
   await loadFunctions()
+  void loadHistory()
 })
 
 async function loadFunctions() {
@@ -376,6 +432,9 @@ async function submit() {
       // 成功后清除字段级错误（防 stale）
       fieldErrors.value = {}
     }
+    // 成功 / 上游失败（HTTP 200 + success=false）后端都会落一条调用历史，
+    // 两种情况都刷新历史列表（422/503 异常路径不落历史，无需刷新）
+    void loadHistory()
   } catch (err: any) {
     const detail = err?.response?.data?.detail ?? err?.response?.data ?? null
     // 字段级错误映射
@@ -769,6 +828,107 @@ const selectedFunction = computed(() =>
           :show-retry="response?.success === false"
           @retry="retry"
         />
+      </div>
+    </section>
+
+    <!-- 调用历史：可折叠卡片，当前用户在该插件下的最近调用（仅本人可见） -->
+    <section class="rounded-xl border border-border bg-card" data-testid="invoke-history">
+      <button
+        type="button"
+        class="flex w-full items-center gap-2 px-4 py-2.5 text-left border-b border-border"
+        data-testid="invoke-history-toggle"
+        @click="historyOpen = !historyOpen"
+      >
+        <Clock class="w-4 h-4 text-primary" />
+        <h3 class="flex-1 text-sm font-medium text-foreground">
+          {{ t('pluginForm.history.title') }}
+        </h3>
+        <ChevronUp v-if="historyOpen" class="w-4 h-4 text-muted-foreground" />
+        <ChevronDown v-else class="w-4 h-4 text-muted-foreground" />
+      </button>
+      <div v-if="historyOpen">
+        <div
+          v-if="historyLoading"
+          class="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground"
+        >
+          <Loader2 class="w-4 h-4 animate-spin" />
+          <span>{{ t('common.loading') }}</span>
+        </div>
+        <p
+          v-else-if="historyError"
+          class="px-4 py-3 text-xs text-destructive"
+          data-testid="invoke-history-error"
+        >
+          {{ historyError }}
+        </p>
+        <p
+          v-else-if="history.length === 0"
+          class="px-4 py-6 text-center text-sm text-muted-foreground"
+          data-testid="invoke-history-empty"
+        >
+          {{ t('pluginForm.history.empty') }}
+        </p>
+        <ul v-else class="divide-y divide-border" data-testid="invoke-history-list">
+          <li v-for="item in history" :key="item.id">
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 px-4 py-2.5 text-left hover:bg-accent"
+              :data-testid="`invoke-history-item-${item.id}`"
+              @click="toggleHistoryItem(item.id)"
+            >
+              <span
+                class="inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium"
+                :class="item.success
+                  ? 'bg-emerald-500/10 text-emerald-600'
+                  : 'bg-destructive/10 text-destructive'"
+              >
+                {{ item.success ? t('pluginForm.history.success') : t('pluginForm.history.failed') }}
+              </span>
+              <span class="shrink-0 text-xs text-muted-foreground">
+                {{ formatHistoryTime(item.created_at) }}
+              </span>
+              <span class="shrink-0 text-xs text-foreground">{{ item.function_name }}</span>
+              <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                {{ truncateSummary(item.params_summary) }}
+              </span>
+              <span
+                v-if="item.latency_ms != null"
+                class="shrink-0 text-[10px] text-muted-foreground"
+              >
+                {{ item.latency_ms }}ms
+              </span>
+              <ChevronDown
+                class="w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform"
+                :class="expandedHistoryId === item.id && 'rotate-180'"
+              />
+            </button>
+            <!-- 展开重放：result_data 即当时的完整 invoke 响应 -->
+            <div
+              v-if="expandedHistoryId === item.id"
+              class="space-y-2 px-4 pb-4"
+              :data-testid="`invoke-history-detail-${item.id}`"
+            >
+              <p class="text-xs text-muted-foreground">
+                {{
+                  item.result_data?.truncated
+                    ? t('pluginForm.history.truncated')
+                    : t('pluginForm.history.clickToView')
+                }}
+              </p>
+              <p v-if="item.error_message" class="text-xs text-destructive">
+                {{ item.error_message }}
+              </p>
+              <div class="max-h-[50vh] overflow-auto rounded-md border border-border bg-background p-3">
+                <PluginResult
+                  :response="historyResponse(item)"
+                  :display="historyDisplay(item)"
+                  :items-path="historyItemsPath(item)"
+                  :show-retry="false"
+                />
+              </div>
+            </div>
+          </li>
+        </ul>
       </div>
     </section>
   </div>

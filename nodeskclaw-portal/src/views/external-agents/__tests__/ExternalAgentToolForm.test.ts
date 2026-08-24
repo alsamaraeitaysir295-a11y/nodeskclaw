@@ -37,6 +37,7 @@ const listFunctions = vi.fn()
 const getFunctionForm = vi.fn()
 const invokeFunction = vi.fn()
 const uploadFunctionFile = vi.fn()
+const listInvocations = vi.fn()
 
 vi.mock('@/services/externalAgents', async () => {
   const actual =
@@ -50,6 +51,7 @@ vi.mock('@/services/externalAgents', async () => {
       getForm: (...args: any[]) => getFunctionForm(...args),
       invoke: (...args: any[]) => invokeFunction(...args),
       uploadFile: (...args: any[]) => uploadFunctionFile(...args),
+      listInvocations: (...args: any[]) => listInvocations(...args),
     },
   }
 })
@@ -140,6 +142,9 @@ beforeEach(() => {
   getFunctionForm.mockReset()
   invokeFunction.mockReset()
   uploadFunctionFile.mockReset()
+  listInvocations.mockReset()
+  // 默认空历史；调用历史的测试用 mockResolvedValueOnce 覆盖
+  listInvocations.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -872,5 +877,135 @@ describe('ExternalAgentToolForm – display=text（RAG 问答 Markdown 渲染）
     expect(html).not.toContain('推理过程')
     expect(html).not.toContain('<think>')
     expect(html).toContain('热压缺陷原因')
+  })
+})
+
+// ── 6. 调用历史（GET /{id}/invocations，仅本人可见） ─────────────────────────
+describe('调用历史', () => {
+  function makeHistoryItem(over: Record<string, any> = {}) {
+    return {
+      id: 'inv-1',
+      agent_id: 'agent-1',
+      function_id: 'fn-default',
+      function_name: 'default',
+      params_summary: '{"line": "L1"}',
+      success: true,
+      upstream_status: 200,
+      latency_ms: 35,
+      result_data: { success: true, data: { rows: [{ code: 'A1' }] }, display: 'json' },
+      error_message: null,
+      created_at: '2026-08-24T10:00:00Z',
+      ...over,
+    }
+  }
+
+  it('挂载时拉取历史（limit=10）并渲染条目：时间 + 功能名 + 成败徽标 + 参数摘要', async () => {
+    listInvocations.mockResolvedValueOnce([
+      makeHistoryItem(),
+      makeHistoryItem({
+        id: 'inv-2', success: false, function_name: 'query_orders',
+        params_summary: '{"q": "长参数'.repeat(50) + '"}',
+        upstream_status: 502, latency_ms: null,
+        result_data: { success: false, upstream_status: 502, error: 'Bad Gateway' },
+        error_message: 'Bad Gateway', created_at: '2026-08-23T09:00:00Z',
+      }),
+    ])
+    const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+
+    expect(listInvocations).toHaveBeenCalledWith('agent-1', 10)
+    const section = wrapper.find('[data-testid="invoke-history"]')
+    expect(section.exists()).toBe(true)
+    expect(section.text()).toContain('pluginForm.history.title')
+    // 两条条目 + 成败徽标 key
+    expect(wrapper.find('[data-testid="invoke-history-item-inv-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="invoke-history-item-inv-2"]').exists()).toBe(true)
+    const text = section.text()
+    expect(text).toContain('pluginForm.history.success')
+    expect(text).toContain('pluginForm.history.failed')
+    expect(text).toContain('default')
+    expect(text).toContain('query_orders')
+    // 参数摘要超长被截断（不渲染完整 500+ 字符）
+    const longItem = wrapper.find('[data-testid="invoke-history-item-inv-2"]').text()
+    expect(longItem.length).toBeLessThan(300)
+    expect(longItem).toContain('...')
+  })
+
+  it('空历史显示空状态', async () => {
+    listInvocations.mockResolvedValueOnce([])
+    const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    expect(wrapper.find('[data-testid="invoke-history-empty"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('pluginForm.history.empty')
+  })
+
+  it('历史加载失败仅在区块内提示，不影响表单', async () => {
+    listInvocations.mockRejectedValueOnce(new Error('network down'))
+    const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    expect(wrapper.find('form').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="invoke-history-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('pluginForm.history.loadFailed')
+  })
+
+  it('点击条目展开完整结果（PluginResult 收到存档响应）', async () => {
+    listInvocations.mockResolvedValueOnce([makeHistoryItem()])
+    const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+
+    // 初始不展开
+    expect(wrapper.find('[data-testid="invoke-history-detail-inv-1"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="invoke-history-item-inv-1"]').trigger('click')
+    expect(wrapper.find('[data-testid="invoke-history-detail-inv-1"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('pluginForm.history.clickToView')
+
+    // PluginResult（stub）收到重放响应与展示形态
+    const plugins = wrapper.findAllComponents({ name: 'PluginResult' })
+    expect(plugins.length).toBeGreaterThanOrEqual(1)
+    const replay = plugins[plugins.length - 1].props() as any
+    expect(replay.response).toMatchObject({
+      success: true,
+      data: { rows: [{ code: 'A1' }] },
+    })
+    expect(replay.display).toBe('json')
+    expect(replay.showRetry).toBe(false)
+
+    // 再点一次收起
+    await wrapper.find('[data-testid="invoke-history-item-inv-1"]').trigger('click')
+    expect(wrapper.find('[data-testid="invoke-history-detail-inv-1"]').exists()).toBe(false)
+  })
+
+  it('截断结果（truncated）展示截断提示而非 clickToView', async () => {
+    listInvocations.mockResolvedValueOnce([
+      makeHistoryItem({
+        result_data: { success: true, truncated: true, display: 'json', data: { truncated: true } },
+      }),
+    ])
+    const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    await wrapper.find('[data-testid="invoke-history-item-inv-1"]').trigger('click')
+    const detail = wrapper.find('[data-testid="invoke-history-detail-inv-1"]')
+    expect(detail.exists()).toBe(true)
+    expect(detail.text()).toContain('pluginForm.history.truncated')
+    expect(detail.text()).not.toContain('pluginForm.history.clickToView')
+  })
+
+  it('invoke 成功后重新拉取历史', async () => {
+    listInvocations.mockResolvedValueOnce([])
+    invokeFunction.mockResolvedValueOnce({ success: true, data: { items: [] } })
+    const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    await flushPromises()
+    expect(listInvocations).toHaveBeenCalledTimes(1)
+
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+    expect(invokeFunction).toHaveBeenCalledTimes(1)
+    expect(listInvocations).toHaveBeenCalledTimes(2)
+    expect(listInvocations).toHaveBeenLastCalledWith('agent-1', 10)
+  })
+
+  it('折叠开关：点击头部隐藏列表', async () => {
+    listInvocations.mockResolvedValueOnce([makeHistoryItem()])
+    const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    expect(wrapper.find('[data-testid="invoke-history-list"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="invoke-history-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="invoke-history-list"]').exists()).toBe(false)
+    // 标题仍在（卡片本体保留）
+    expect(wrapper.find('[data-testid="invoke-history"]').text()).toContain('pluginForm.history.title')
   })
 })

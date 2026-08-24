@@ -383,6 +383,7 @@ async def invoke_tool(
         return {
             "success": False,
             "upstream_status": upstream_status,
+            "latency_ms": latency_ms,
             "error": _extract_error_message(upstream_body, upstream_status),
         }
 
@@ -408,8 +409,12 @@ async def invoke_tool(
     )
 
     # display=text：按 text_path 取字符串字段（如 RAG 的 answer），前端渲染 Markdown
+    # upstream_status / latency_ms 同时给用户侧「调用历史」落库使用（invoke 响应附带，
+    # 前端可忽略）
     result: dict[str, Any] = {
         "success": True,
+        "upstream_status": upstream_status,
+        "latency_ms": latency_ms,
         "data": data,
         "display": output_hint.display,
         "items_path": items_path,

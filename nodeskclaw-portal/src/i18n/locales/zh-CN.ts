@@ -2471,6 +2471,16 @@ const zhCN = {
     },
     resultTitle: "调用结果",
     noFunctions: "该插件暂无任何功能",
+    // 用户侧「调用历史」：仅本人可见的最近调用记录，点击重放完整结果
+    history: {
+      title: "调用历史",
+      empty: "暂无调用记录",
+      success: "成功",
+      failed: "失败",
+      clickToView: "点击查看完整结果",
+      loadFailed: "加载调用历史失败",
+      truncated: "结果过大，仅保留摘要",
+    },
     functionStatus: {
       inactive: "未启用",
     },

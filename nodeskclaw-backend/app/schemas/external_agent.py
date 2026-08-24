@@ -415,6 +415,29 @@ class ExternalAgentFunctionUpdate(PydanticBase):
     sort_order: int | None = None
 
 
+class ExternalAgentInvocationResponse(PydanticBase):
+    """tool 型插件调用历史项（用户侧「调用历史」，仅本人可见）。
+
+    result_data 为完整 invoke 响应（success/data/display/items_path...），
+    前端点击历史项后直接交给 PluginResult 重放；超 50KB 的结果会被截断为
+    {truncated: true, ...} 提示对象。
+    """
+
+    id: str
+    agent_id: str
+    function_id: str | None
+    function_name: str
+    params_summary: str | None
+    success: bool
+    upstream_status: int | None
+    latency_ms: int | None
+    result_data: dict | None
+    error_message: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ExternalAgentFunctionResponse(PydanticBase):
     """function 响应体。"""
 

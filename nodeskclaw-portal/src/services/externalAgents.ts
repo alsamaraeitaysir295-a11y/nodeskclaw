@@ -475,6 +475,24 @@ export interface ExternalAgentFunctionForm {
   invoke_config: Record<string, any>
 }
 
+/** 调用历史单条记录（GET /{agent_id}/invocations，仅本人可见）。
+ *  result_data 为完整 invoke 响应（success/data/display/items_path...），
+ *  可直接交给 PluginResult 重放；超 50KB 的结果被截断为 {truncated: true, ...}。
+ */
+export interface InvocationHistoryItem {
+  id: string
+  agent_id: string
+  function_id: string | null
+  function_name: string
+  params_summary: string | null
+  success: boolean
+  upstream_status: number | null
+  latency_ms: number | null
+  result_data: Record<string, any> | null
+  error_message: string | null
+  created_at: string
+}
+
 export const externalAgentFunctionApi = {
   /** 列出某插件下的所有 function（含 draft/disabled；前端按 status 决定是否可点）。 */
   list(agentId: string): Promise<ExternalAgentFunction[]> {
@@ -520,6 +538,19 @@ export const externalAgentFunctionApi = {
       { headers: { 'Content-Type': 'multipart/form-data' } },
     )
     return res.data.data
+  },
+
+  /**
+   * 当前用户在该插件下的调用历史（created_at 倒序，仅本人可见）。
+   * 用户侧表单页「调用历史」区块的数据源；点击条目用 result_data 重放完整结果。
+   */
+  listInvocations(agentId: string, limit = 10): Promise<InvocationHistoryItem[]> {
+    return api
+      .get<{ data: InvocationHistoryItem[] }>(
+        `/external-agents/${agentId}/invocations`,
+        { params: { limit } },
+      )
+      .then((r) => r.data.data ?? [])
   },
 
   /** 单功能试调（POST /{agentId}/functions/{functionId}/probe，operator 权限）。 */

@@ -2463,6 +2463,16 @@ const enUS = {
     },
     resultTitle: "Result",
     noFunctions: "No functions available for this plugin",
+    // User-side "Invocation History": recent invocations visible to the owner only
+    history: {
+      title: "Invocation History",
+      empty: "No invocations yet",
+      success: "Success",
+      failed: "Failed",
+      clickToView: "Click to view full result",
+      loadFailed: "Failed to load invocation history",
+      truncated: "Result too large, only a summary is kept",
+    },
     functionStatus: {
       inactive: "Inactive",
     },
