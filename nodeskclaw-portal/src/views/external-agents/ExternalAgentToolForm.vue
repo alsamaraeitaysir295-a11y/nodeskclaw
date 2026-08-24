@@ -87,10 +87,17 @@ function translateFieldError(msg: string): string {
   return t('pluginForm.errors.fieldInvalid')
 }
 
-/** 从 axios 错误里取后端 message_key 做 i18n 展示；取不到回退到通用文案。 */
+/** 从 axios 错误里取后端错误信息；优先用后端 message（角色名等参数已插值），
+ *  仅当 message 缺失时才走 i18n key 翻译（避免 {role} 等占位符显示为空）。 */
 function apiErrorMessage(e: unknown, fallbackKey = 'pluginForm.errors.loadFailed'): string {
   const resp = (e as any)?.response?.data
-  if (resp?.message_key) return t(resp.message_key)
+  // 后端 message 已包含完整中文（如"需要 operator 及以上角色"），优先使用
+  if (resp?.message && /[一-龥]/.test(resp.message)) return resp.message
+  // 无中文 message 时走 i18n（key 对应的模板不含参数占位符的场景）
+  if (resp?.message_key && !resp.message_key.includes('insufficient')) {
+    return t(resp.message_key)
+  }
+  if (resp?.message) return resp.message
   if (e instanceof Error && e.message) return e.message
   return t(fallbackKey)
 }

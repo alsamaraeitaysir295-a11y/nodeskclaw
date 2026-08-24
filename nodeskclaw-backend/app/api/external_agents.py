@@ -389,10 +389,14 @@ async def delete_agent(
 async def list_functions(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    auth=Depends(require_org_member_role("operator")),
+    auth=Depends(get_current_org),
 ):
-    """列出某插件的所有 function（按 sort_order 升序，未软删）。"""
-    user, org = auth
+    """列出某插件的所有 function（按 sort_order 升序，未软删）。
+
+    权限：所有组织成员可见（用户端表单页需要先拉功能列表才能渲染），
+    管理操作（POST/PATCH/DELETE/probe）仍走 operator 校验。
+    """
+    _, org = auth
     funcs = await external_agent_service.list_functions(
         agent_id=agent_id, org_id=org.id, db=db,
     )

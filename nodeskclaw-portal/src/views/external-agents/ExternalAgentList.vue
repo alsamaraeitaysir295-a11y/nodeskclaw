@@ -79,6 +79,27 @@ function openAgent(agent: ExternalAgent) {
     router.push(`/agents/${agent.id}/chat`)
   }
 }
+
+// ── 生命周期状态(Phase 1 §10)：draft / active / disabled ────────────────────
+// 非管理员只看到 active 的插件；管理员看到全部(含草稿/停用，便于管理)
+const visibleAgents = computed(() => {
+  if (canManage.value) return store.agents
+  return store.agents.filter((a) => a.status === 'active' || !a.status)
+})
+
+function lifecycleBadge(agent: ExternalAgent): { label: string; cls: string } | null {
+  if (agent.status === 'disabled') {
+    return { label: t('externalAgentList.statusDisabled'), cls: 'bg-gray-200 text-gray-600' }
+  }
+  if (agent.status === 'draft') {
+    return { label: t('externalAgentList.statusDraft'), cls: 'bg-amber-100 text-amber-700' }
+  }
+  return null // active 不显示额外徽章(连接状态已有)
+}
+
+function isUsable(agent: ExternalAgent): boolean {
+  return agent.status === 'active' || !agent.status
+}
 </script>
 
 <template>
@@ -107,7 +128,7 @@ function openAgent(agent: ExternalAgent) {
 
     <!-- 空状态 -->
     <div
-      v-else-if="store.agents.length === 0"
+      v-else-if="visibleAgents.length === 0"
       class="flex flex-col items-center justify-center py-24 text-center"
     >
       <Bot class="w-12 h-12 text-muted-foreground/40 mb-4" />
@@ -128,9 +149,10 @@ function openAgent(agent: ExternalAgent) {
     <!-- 能力卡片网格 -->
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       <div
-        v-for="agent in store.agents"
+        v-for="agent in visibleAgents"
         :key="agent.id"
         class="relative rounded-xl border border-border bg-card overflow-hidden flex flex-col"
+        :class="{ 'opacity-60': !isUsable(agent) }"
       >
         <!-- 主题色装饰条 -->
         <div
@@ -192,8 +214,17 @@ function openAgent(agent: ExternalAgent) {
             </span>
           </div>
 
-          <!-- 连接状态 -->
-          <div class="flex items-center gap-1.5">
+          <!-- 连接状态 + 生命周期状态 -->
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <!-- 生命周期徽章(draft/disabled)，active 不显示 -->
+            <span
+              v-if="lifecycleBadge(agent)"
+              class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
+              :class="lifecycleBadge(agent)!.cls"
+              :data-test="`lifecycle-${agent.id}`"
+            >
+              {{ lifecycleBadge(agent)!.label }}
+            </span>
             <span
               class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
               :class="statusClass(agent)"
@@ -212,8 +243,13 @@ function openAgent(agent: ExternalAgent) {
         <!-- 操作栏 -->
         <div class="px-4 py-3 border-t border-border bg-muted/20 flex items-center gap-2">
           <button
-            class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary text-primary-foreground py-1.5 text-xs font-medium hover:opacity-90"
-            @click="openAgent(agent)"
+            class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-medium"
+            :class="isUsable(agent)
+              ? 'bg-primary text-primary-foreground hover:opacity-90'
+              : 'bg-muted text-muted-foreground cursor-not-allowed'"
+            :disabled="!isUsable(agent)"
+            :title="!isUsable(agent) ? t('externalAgentList.disabledHint') : undefined"
+            @click="isUsable(agent) && openAgent(agent)"
           >
             <MessageSquare v-if="!isToolAgent(agent)" class="w-3.5 h-3.5" />
             <Wrench v-else class="w-3.5 h-3.5" />
