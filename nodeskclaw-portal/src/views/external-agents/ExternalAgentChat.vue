@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   ChevronLeft,
   Plus,
@@ -18,10 +19,12 @@ import type {
   ChatSession,
 } from '@/services/externalAgents'
 import { useExternalAgentStore } from '@/stores/externalAgents'
+import { renderMarkdown } from '@/utils/markdown'
 
 // ── 路由 ─────────────────────────────────────────────────────────────────────
 const route = useRoute()
 const agentId = route.params.id as string
+const { t } = useI18n()
 
 // ── Store ────────────────────────────────────────────────────────────────────
 const agentStore = useExternalAgentStore()
@@ -274,28 +277,22 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
-// ── 内容渲染（linkify）────────────────────────────────────────────────────────
+// ── 内容渲染（renderMarkdown via DOMPurify） ──────────────────────────────────
+// spec §7.2：聊天页统一走 renderMarkdown()（内含 DOMPurify），不允许 v-html 裸插。
+// 额外对 inline 链接 target=_blank + rel=noopener noreferrer 仍由 DOMPurify hook 注入。
 function renderContent(text: string): string {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/\n/g, '<br>')
-  return escaped.replace(
-    /(https?:\/\/[^\s&<>"]+)/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline break-all">$1</a>',
-  )
+  return renderMarkdown(text ?? '')
 }
 
+// ── 相对时间 ──────────────────────────────────────────────────────────────────
 function formatRelativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
   const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes}分钟前`
+  if (minutes < 1) return t('externalAgentChat.time.justNow')
+  if (minutes < 60) return t('externalAgentChat.time.minutesAgo', { count: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}小时前`
-  return `${Math.floor(hours / 24)}天前`
+  if (hours < 24) return t('externalAgentChat.time.hoursAgo', { count: hours })
+  return t('externalAgentChat.time.daysAgo', { count: Math.floor(hours / 24) })
 }
 </script>
 
@@ -309,14 +306,14 @@ function formatRelativeTime(dateStr: string): string {
           @click="$router.back()"
         >
           <ChevronLeft :size="16" />
-          返回
+          {{ t('common.goBack') }}
         </button>
         <button
           class="flex items-center gap-1 text-sm text-primary hover:text-primary/80"
           @click="newSession"
         >
           <Plus :size="16" />
-          新建
+          {{ t('externalAgentChat.newSession') }}
         </button>
       </div>
 
@@ -331,17 +328,17 @@ function formatRelativeTime(dateStr: string): string {
             :class="agent?.is_reachable ? 'bg-green-500' : 'bg-muted-foreground'"
           />
           <span class="text-xs text-muted-foreground">
-            {{ agent?.is_reachable ? '已连接' : '未连接' }}
+            {{ agent?.is_reachable ? t('externalAgentChat.connected') : t('externalAgentChat.disconnected') }}
           </span>
         </div>
       </div>
 
       <div class="flex-1 overflow-y-auto py-1">
         <div v-if="sessionsLoading" class="px-3 py-4 text-xs text-muted-foreground text-center">
-          加载中...
+          {{ t('externalAgentChat.sessionsLoading') }}
         </div>
         <div v-else-if="!sessions.length" class="px-3 py-4 text-xs text-muted-foreground text-center">
-          暂无对话，点击「新建」开始
+          {{ t('externalAgentChat.noSessions') }}
         </div>
         <div
           v-for="s in sessions"
@@ -355,12 +352,13 @@ function formatRelativeTime(dateStr: string): string {
         >
           <div class="flex-1 min-w-0">
             <p class="text-sm text-foreground truncate">
-              {{ s.title || '新对话' }}
+              {{ s.title || t('externalAgentChat.untitledSession') }}
             </p>
             <p class="text-xs text-muted-foreground">{{ formatRelativeTime(s.updated_at) }}</p>
           </div>
           <button
             class="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-red-400 transition-opacity"
+            :title="t('externalAgentChat.deleteSession')"
             @click="deleteSession(s.id, $event)"
           >
             <Trash2 :size="13" />
@@ -377,11 +375,11 @@ function formatRelativeTime(dateStr: string): string {
           class="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground"
         >
           <span v-if="agent?.icon_emoji" class="text-4xl">{{ agent.icon_emoji }}</span>
-          <p class="text-sm">{{ agent?.description || '开始与 Agent 对话' }}</p>
+          <p class="text-sm">{{ agent?.description || t('externalAgentChat.startHint') }}</p>
         </div>
 
         <div v-if="messagesLoading" class="flex justify-center py-8">
-          <span class="text-sm text-muted-foreground">加载历史消息...</span>
+          <span class="text-sm text-muted-foreground">{{ t('externalAgentChat.messagesLoading') }}</span>
         </div>
 
         <template v-if="!messagesLoading">
@@ -426,23 +424,22 @@ function formatRelativeTime(dateStr: string): string {
             </div>
 
             <div v-else class="max-w-[70%]">
-              <!-- 推理链路：可折叠展示，在正式回复上方 -->
+              <!-- 推理链路：可折叠展示，在正式回复上方；走 renderMarkdown() -->
               <details
                 v-if="msg.thinking"
                 class="mb-1.5 rounded-xl border border-border/40 bg-muted/20 text-xs text-muted-foreground"
               >
                 <summary class="cursor-pointer select-none px-3 py-1.5 hover:text-foreground">
-                  思考过程
+                  {{ t('externalAgentChat.thinkingSummary') }}
                 </summary>
-                <div class="px-3 pb-2 pt-1 whitespace-pre-wrap leading-relaxed">
-                  {{ msg.thinking }}
+                <div class="ea-md px-3 pb-2 pt-1 leading-relaxed">
+                  <span v-html="renderContent(msg.thinking)" />
                 </div>
               </details>
               <div
                 class="px-4 py-2.5 bg-secondary text-secondary-foreground text-sm rounded-2xl rounded-tl-sm ea-msg-assistant"
               >
-                <!-- eslint-disable-next-line vue/no-v-html -->
-                <span v-html="renderContent(msg.content)" />
+                <span class="ea-md" v-html="renderContent(msg.content)" />
                 <span
                   v-if="msg.streaming"
                   class="inline-block w-0.5 h-3.5 bg-muted-foreground ml-0.5 animate-pulse"
@@ -477,13 +474,14 @@ function formatRelativeTime(dateStr: string): string {
             </div>
             <button
               class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-foreground text-background rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              :title="t('common.delete')"
               @click="removePendingAttachment(idx)"
             >
               <X :size="10" />
             </button>
           </div>
           <div v-if="isUploading" class="flex items-center px-3 py-2 text-xs text-muted-foreground">
-            上传中...
+            {{ t('externalAgentChat.uploading') }}
           </div>
         </div>
 
@@ -491,6 +489,7 @@ function formatRelativeTime(dateStr: string): string {
           <button
             class="p-2 text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
             :disabled="!currentSessionId || isStreaming"
+            :title="t('externalAgentChat.attachFile')"
             @click="openFilePicker"
           >
             <Paperclip :size="18" />
@@ -508,7 +507,7 @@ function formatRelativeTime(dateStr: string): string {
             rows="1"
             class="flex-1 resize-none rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:border-primary/50 max-h-32 overflow-y-auto ea-textarea"
             :class="{ 'opacity-50': !currentSessionId }"
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            :placeholder="t('externalAgentChat.inputPlaceholder')"
             :disabled="!currentSessionId || isStreaming"
             @keydown="handleKeydown"
           />
@@ -516,6 +515,7 @@ function formatRelativeTime(dateStr: string): string {
           <button
             class="p-2 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             :disabled="(!inputText.trim() && !pendingAttachments.length) || isStreaming || !currentSessionId"
+            :title="t('externalAgentChat.send')"
             @click="send"
           >
             <Send :size="16" />
@@ -543,4 +543,75 @@ function formatRelativeTime(dateStr: string): string {
   color: #ffffff !important;
   color-scheme: dark;
 }
+
+/* Markdown 渲染后的基本样式（仅作用于已 sanitize 的 DOM） */
+.ea-md :deep(p) {
+  margin: 0 0 0.5rem;
+}
+.ea-md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.ea-md :deep(pre) {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  background-color: rgba(255, 255, 255, 0.06);
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+.ea-md :deep(code) {
+  background-color: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+.ea-md :deep(pre code) {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.ea-md :deep(ul),
+.ea-md :deep(ol) {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+.ea-md :deep(li) {
+  margin: 0.15rem 0;
+}
+.ea-md :deep(blockquote) {
+  margin: 0.5rem 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.75);
+}
+.ea-md :deep(a) {
+  color: #60a5fa;
+  text-decoration: underline;
+}
+.ea-md :deep(h1),
+.ea-md :deep(h2),
+.ea-md :deep(h3),
+.ea-md :deep(h4) {
+  margin: 0.75rem 0 0.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.ea-md :deep(h1) { font-size: 1.1rem; }
+.ea-md :deep(h2) { font-size: 1.05rem; }
+.ea-md :deep(h3) { font-size: 1rem; }
+.ea-md :deep(h4) { font-size: 0.95rem; }
+.ea-md :deep(table) {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+.ea-md :deep(th),
+.ea-md :deep(td) {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 0.25rem 0.5rem;
+}
+.ea-md :deep(strong) { font-weight: 600; }
+.ea-md :deep(em) { font-style: italic; }
 </style>

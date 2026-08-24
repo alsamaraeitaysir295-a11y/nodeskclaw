@@ -172,16 +172,23 @@ const ceRoutes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, hideNav: true },
   },
   {
+    // 工具型插件表单页：保留导航栏（用户在平台内频繁往返，hideNav 反而不便）
+    path: '/agents/:id/form',
+    name: 'ExternalAgentToolForm',
+    component: () => import('@/views/external-agents/ExternalAgentToolForm.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/org-settings/external-agents/new',
     name: 'ExternalAgentNew',
     component: () => import('@/views/external-agents/ExternalAgentFormView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requiredOrgRole: 'operator' },
   },
   {
     path: '/org-settings/external-agents/:id/edit',
     name: 'ExternalAgentEdit',
     component: () => import('@/views/external-agents/ExternalAgentFormView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requiredOrgRole: 'operator' },
   },
   {
     path: '/admin',

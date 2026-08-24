@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Bot, Plus, RefreshCw, CheckCircle2, XCircle, Circle, MessageSquare, Pencil, Trash2 } from 'lucide-vue-next'
+import { Bot, Plus, RefreshCw, CheckCircle2, XCircle, Circle, MessageSquare, Wrench, Pencil, Trash2, Wand2 } from 'lucide-vue-next'
 import { useExternalAgentStore } from '@/stores/externalAgents'
 import { externalAgentApi, type ExternalAgent } from '@/services/externalAgents'
 import { useAuthStore } from '@/stores/auth'
 import { hasOrgRoleLevel } from '@/utils/orgRole'
 
+const { t, locale } = useI18n()
 const router = useRouter()
 const store = useExternalAgentStore()
 const authStore = useAuthStore()
@@ -35,7 +37,7 @@ async function sync(agent: ExternalAgent) {
 }
 
 async function remove(agent: ExternalAgent) {
-  if (!confirm(`确定删除 Agent「${agent.name}」吗？`)) return
+  if (!confirm(t('externalAgentList.confirmDelete', { name: agent.name }))) return
   deleting.value = agent.id
   try {
     await externalAgentApi.remove(agent.id)
@@ -52,14 +54,30 @@ function statusClass(agent: ExternalAgent) {
 }
 
 function statusLabel(agent: ExternalAgent) {
-  if (agent.is_reachable) return '已连接'
-  if (agent.last_checked_at) return '连接失败'
-  return '未验证'
+  if (agent.is_reachable) return t('externalAgentList.statusConnected')
+  if (agent.last_checked_at) return t('externalAgentList.statusFailed')
+  return t('externalAgentList.statusUnchecked')
 }
 
 function formatTime(ts: string | null) {
   if (!ts) return ''
-  return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  // 跟随 i18n locale 切换；中文走 zh-CN 数字格式，英文走默认短格式
+  return new Date(ts).toLocaleString(locale.value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+// ── Phase 1 §7.2：click 分支 ──────────────────────────────────────────────────
+// chat 型 → 既有 ExternalAgentChat；tool 型 → 新 ExternalAgentToolForm。
+// 既有的 chat 行为（路由 / 按钮）不改动：仅在 openAgent 里按 type 选择目的地。
+function isToolAgent(agent: ExternalAgent): boolean {
+  return agent.type === 'tool'
+}
+
+function openAgent(agent: ExternalAgent) {
+  if (isToolAgent(agent)) {
+    router.push(`/agents/${agent.id}/form`)
+  } else {
+    router.push(`/agents/${agent.id}/chat`)
+  }
 }
 </script>
 
@@ -69,8 +87,8 @@ function formatTime(ts: string | null) {
     <div class="flex items-center justify-between mb-6">
       <div class="flex items-center gap-3">
         <Bot class="w-6 h-6 text-primary" />
-        <h1 class="text-xl font-semibold text-foreground">专用 Agent</h1>
-        <span class="text-xs text-muted-foreground">运行在外部服务器上的专用 AI Agent</span>
+        <h1 class="text-xl font-semibold text-foreground">{{ t('externalAgentList.title') }}</h1>
+        <span class="text-xs text-muted-foreground">{{ t('externalAgentList.subtitle') }}</span>
       </div>
       <button
         v-if="canManage"
@@ -78,13 +96,13 @@ function formatTime(ts: string | null) {
         @click="router.push('/org-settings/external-agents/new')"
       >
         <Plus class="w-4 h-4" />
-        添加 Agent
+        {{ t('externalAgentList.addAgent') }}
       </button>
     </div>
 
     <!-- 加载中 -->
     <div v-if="store.loading" class="text-sm text-muted-foreground text-center py-20">
-      加载中...
+      {{ t('externalAgentList.loading') }}
     </div>
 
     <!-- 空状态 -->
@@ -93,9 +111,9 @@ function formatTime(ts: string | null) {
       class="flex flex-col items-center justify-center py-24 text-center"
     >
       <Bot class="w-12 h-12 text-muted-foreground/40 mb-4" />
-      <p class="text-sm font-medium text-foreground mb-1">还没有接入专用 Agent</p>
+      <p class="text-sm font-medium text-foreground mb-1">{{ t('externalAgentList.emptyTitle') }}</p>
       <p class="text-xs text-muted-foreground mb-4">
-        由管理员添加运行在外部服务器的专用 AI Agent，连接后即可在此发起对话
+        {{ t('externalAgentList.emptyDescription') }}
       </p>
       <button
         v-if="canManage"
@@ -103,7 +121,7 @@ function formatTime(ts: string | null) {
         @click="router.push('/org-settings/external-agents/new')"
       >
         <Plus class="w-4 h-4" />
-        添加 Agent
+        {{ t('externalAgentList.addAgent') }}
       </button>
     </div>
 
@@ -132,7 +150,15 @@ function formatTime(ts: string | null) {
               <p class="font-semibold text-foreground text-sm leading-tight truncate">{{ agent.name }}</p>
               <!-- 协议 badge -->
               <span class="mt-0.5 inline-block text-[10px] font-medium px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">
-                {{ agent.protocol === 'openai_compatible' ? 'OpenAI 兼容' : '自定义协议' }}
+                {{ agent.protocol === 'openai_compatible' ? t('externalAgentList.protocolOpenai') : t('externalAgentList.protocolCustom') }}
+              </span>
+              <!-- Phase 1 §3 插件分类徽章（B类工具） -->
+              <span
+                v-if="isToolAgent(agent)"
+                class="mt-0.5 inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700"
+              >
+                <Wrench :size="10" />
+                {{ t('externalAgentList.typeTool') }}
               </span>
             </div>
           </div>
@@ -150,6 +176,19 @@ function formatTime(ts: string | null) {
               class="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground"
             >
               {{ cap }}
+            </span>
+          </div>
+
+          <!-- Phase 2 §8.4：tool 型显示功能数（chat 型不展示） -->
+          <div
+            v-if="isToolAgent(agent) && (agent.function_count ?? 0) > 0"
+            class="flex flex-wrap gap-1"
+          >
+            <span
+              class="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded bg-sky-100 text-sky-700"
+              :data-test="`function-count-${agent.id}`"
+            >
+              {{ t('externalAgentList.functionsCount', { count: agent.function_count ?? 0 }) }}
             </span>
           </div>
 
@@ -174,10 +213,11 @@ function formatTime(ts: string | null) {
         <div class="px-4 py-3 border-t border-border bg-muted/20 flex items-center gap-2">
           <button
             class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary text-primary-foreground py-1.5 text-xs font-medium hover:opacity-90"
-            @click="router.push(`/agents/${agent.id}/chat`)"
+            @click="openAgent(agent)"
           >
-            <MessageSquare class="w-3.5 h-3.5" />
-            发起对话
+            <MessageSquare v-if="!isToolAgent(agent)" class="w-3.5 h-3.5" />
+            <Wrench v-else class="w-3.5 h-3.5" />
+            {{ isToolAgent(agent) ? t('externalAgentList.openForm') : t('externalAgentList.openChat') }}
           </button>
           <button
             v-if="canManage"
@@ -185,13 +225,22 @@ function formatTime(ts: string | null) {
             @click="router.push(`/org-settings/external-agents/${agent.id}/edit`)"
           >
             <Pencil class="w-3 h-3" />
-            编辑
+            {{ t('externalAgentList.edit') }}
+          </button>
+          <button
+            v-if="canManage && agent.status === 'draft'"
+            class="inline-flex items-center justify-center gap-1 rounded-lg border border-amber-300 text-amber-700 px-3 py-1.5 text-xs hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-200"
+            :title="t('externalAgentList.configureWizard')"
+            @click="router.push(`/org-settings/external-agents/${agent.id}/edit`)"
+          >
+            <Wand2 class="w-3 h-3" />
+            {{ t('externalAgentList.configureWizard') }}
           </button>
           <button
             v-if="canManage"
             class="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 disabled:opacity-40"
             :disabled="syncing === agent.id"
-            title="验证连接"
+            :title="t('externalAgentList.syncTitle')"
             @click="sync(agent)"
           >
             <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': syncing === agent.id }" />
