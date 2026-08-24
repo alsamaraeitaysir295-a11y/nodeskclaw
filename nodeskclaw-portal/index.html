@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <title>DeskClaw</title>
+    <script>
+      // 首帧前应用已保存的主题，避免浅色用户看到深色闪烁；默认保持深色
+      try {
+        if (localStorage.getItem('portal_theme') === 'light') {
+          document.documentElement.classList.remove('dark')
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body class="bg-background text-foreground antialiased">
     <div id="app"></div>

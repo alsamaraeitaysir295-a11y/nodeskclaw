@@ -13,10 +13,11 @@ vi.mock('@/services/api', () => ({
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
     t: (key: string) => key,
+    te: () => false,
     locale: { value: 'zh-CN' },
   }),
   createI18n: () => ({
-    global: { t: (key: string) => key },
+    global: { t: (key: string) => key, te: () => false },
     install: vi.fn(),
   }),
 }))

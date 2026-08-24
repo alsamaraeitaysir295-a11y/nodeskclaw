@@ -48,9 +48,13 @@ services:
       NODESKCLAW_EDITION: ce
       DOCKER_DATA_DIR: /nodeskclaw-data
       DOCKER_HOST_DATA_DIR: ${NODESKCLAW_DATA_DIR:-${HOME:-.}/.nodeskclaw/docker-instances}
-      # AI 员工回连后端地址（仅管理 Docker 实例时可保持默认 localhost）
-      # 若管理远端 K8s 集群上的 AI 员工，必须改为 K8s Pod 可达的外部地址
-      AGENT_API_BASE_URL: ${AGENT_API_BASE_URL:-http://localhost:4510/api/v1}
+      # AI 员工回连后端地址：留空 = 按 DEPLOY_ENV 推导
+      #   本地（默认）→ http://host.docker.internal:4510/api/v1（AI 员工容器经
+      #     extra_hosts 回连宿主机映射端口，勿写死宿主局域网 IP，跨网段不可达）
+      #   DEPLOY_ENV=server → http://nodeskclaw-backend:8000/api/v1（同 docker 网络）
+      # 若管理远端 K8s 集群上的 AI 员工，必须显式设为 K8s Pod 可达的外部地址
+      AGENT_API_BASE_URL: ${AGENT_API_BASE_URL:-}
+      DEPLOY_ENV: ${DEPLOY_ENV:-}
       DEBUG: ${DEBUG:-true}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-me-32-bytes-base64-key__=}

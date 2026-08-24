@@ -5,15 +5,17 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
 import { hasOrgRoleLevel } from '@/utils/orgRole'
-import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, Brain, BookOpen, ClipboardCheck, Zap, Bot } from 'lucide-vue-next'
+import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, Brain, BookOpen, ClipboardCheck, Zap, Bot, Sun, Moon } from 'lucide-vue-next'
 import { useFeature } from '@/composables/useFeature'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 import ToastContainer from '@/components/shared/ToastContainer.vue'
 import ConfirmDialog from '@/components/shared/ConfirmDialog.vue'
 import { useDeployNotification } from '@/composables/useDeployNotification'
+import { useThemeStore } from '@/stores/theme'
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const themeStore = useThemeStore()
 const { t } = useI18n()
 
 const isLoginPage = computed(() => route.path === '/login')
@@ -35,6 +37,7 @@ function onDocumentClick(e: MouseEvent) {
 
 onMounted(async () => {
   document.addEventListener('click', onDocumentClick)
+  themeStore.apply()
   if (authStore.isLoggedIn && !authStore.user) {
     await authStore.fetchUser()
   }
@@ -189,6 +192,16 @@ function onLocaleChange(value: string) {
           </nav>
         </div>
         <div class="flex items-center gap-3">
+          <button
+            type="button"
+            class="h-8 w-8 rounded-md border border-border bg-card flex items-center justify-center text-foreground transition-all hover:border-primary/40 hover:bg-muted/30 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+            :aria-label="t('common.themeToggle')"
+            :title="t('common.themeToggle')"
+            @click="themeStore.toggle()"
+          >
+            <Sun v-if="themeStore.theme === 'dark'" class="h-4 w-4 text-muted-foreground" />
+            <Moon v-else class="h-4 w-4 text-muted-foreground" />
+          </button>
           <LocaleSelect :model-value="locale" @update:model-value="onLocaleChange" />
           <div class="relative" ref="userMenuRef">
           <button

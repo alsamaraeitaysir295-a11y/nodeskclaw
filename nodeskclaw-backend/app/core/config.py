@@ -111,9 +111,32 @@ class Settings(BaseSettings):
     LLM_PROXY_INTERNAL_URL: str = ""  # K8s 集群内网地址，用于 openclaw.json 中的 baseUrl（绕过 ALB）
 
     # ── Agent API（AI 员工 Pod 回调后端的内网地址）────────
-    AGENT_API_BASE_URL: str = "http://localhost:4510/api/v1"
+    # 留空 = 按 DEPLOY_ENV 推导（见 _resolve_agent_api_base_url）；
+    # 显式设置（.env / 环境变量）永远优先，K8s 等其它拓扑请显式指定可达地址。
+    AGENT_API_BASE_URL: str = ""
+    # 部署环境标识：server = 服务器上同一 docker 网络的 compose 部署；
+    # 留空 = 本地开发（WSL2 + Docker，AI 员工容器经 host.docker.internal 回连宿主）。
+    DEPLOY_ENV: str = ""
     GENE_CALLBACK_SECRET: str = ""
     ALLOW_LEGACY_GENE_CALLBACKS: bool = False
+
+    @model_validator(mode="after")
+    def _resolve_agent_api_base_url(self) -> "Settings":
+        """AGENT_API_BASE_URL 未显式配置时按部署环境推导默认值。
+
+        - 本地 WSL2+Docker：AI 员工容器由 docker_provider 注入
+          extra_hosts(host.docker.internal:host-gateway)，经宿主机 4510 端口
+          映射回连 backend；写死宿主局域网 IP（如 10.50.x.x）在跨网段时不可达。
+        - 服务器部署（DEPLOY_ENV=server）：backend 与 AI 员工同一 docker 网络，
+          直接走服务名 nodeskclaw-backend:8000，不依赖宿主端口映射。
+        """
+        if self.AGENT_API_BASE_URL:
+            return self
+        if self.DEPLOY_ENV == "server":
+            self.AGENT_API_BASE_URL = "http://nodeskclaw-backend:8000/api/v1"
+        else:
+            self.AGENT_API_BASE_URL = "http://host.docker.internal:4510/api/v1"
+        return self
 
     # ── Agent Tunnel（实例通过 WebSocket 主动连接后端的地址）────
     TUNNEL_BASE_URL: str = ""
@@ -166,6 +189,19 @@ class Settings(BaseSettings):
     # 紧急逃生开关：跳过 seed 阶段的 _backfill_subject_roles_from_legacy 全量回填
     # 仅排障 / 大表慢启动场景使用，正常运行务必保持 False 以保证 subject_roles 数据一致
     SKIP_RBAC_BACKFILL: bool = False
+
+    # ── 外部 Agent 插件化接入（Phase 1，spec §9.5）──────────────────
+    # 单副本进程内令牌桶限流开关；默认开启。设为 False 时跳过所有限流检查
+    # （用于 E2E / 压测场景，运维也可用于紧急下线）。
+    # 多副本部署下计数器不跨 Pod 共享（实际上限接近 副本数 × 容量），需另行
+    # 决策迁移到 Redis/DB 计数（独立任务，不在本任务工时内）。
+    EXTERNAL_AGENT_RATE_LIMIT_ENABLED: bool = True
+    # 单 (agent, user) 桶容量（令牌数）
+    EXTERNAL_AGENT_RATE_LIMIT_CAPACITY: int = 10
+    # 令牌桶 refill 周期（秒）——每过该秒数补充满容量个令牌
+    EXTERNAL_AGENT_RATE_LIMIT_REFILL_SECONDS: float = 60.0
+    # 桶条目无活动 TTL（秒）：超时后从字典驱逐，防止长期不使用仍占用内存
+    EXTERNAL_AGENT_RATE_LIMIT_BUCKET_TTL: int = 300
 
 
 settings = Settings()

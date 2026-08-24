@@ -17,7 +17,14 @@ const mergedNoProxy = Array.from(new Set([...existingNoProxy, ...LOCAL_BYPASS]))
 process.env.NO_PROXY = mergedNoProxy
 process.env.no_proxy = mergedNoProxy
 
-const apiTarget = process.env.API_PROXY_TARGET || 'http://localhost:4510'
+// API 代理目标：
+// - 默认（本地开发）：vite 跑在宿主机上，backend 端口映射到宿主 localhost:4510，
+//   直接用 localhost 即可（宿主机上 host.docker.internal 不可解析）。
+// - DEPLOY_ENV=server（vite 跑在 compose 网络内的场景）：走服务名。
+// - 容器内跑 vite dev 的特殊场景：显式设 API_PROXY_TARGET=http://host.docker.internal:4510。
+const apiTarget =
+  process.env.API_PROXY_TARGET ||
+  (process.env.DEPLOY_ENV === 'server' ? 'http://nodeskclaw-backend:8000' : 'http://localhost:4510')
 
 const projectRoot = path.resolve(__dirname, '..')
 const eePortalDir = path.resolve(projectRoot, 'ee/frontend/portal')

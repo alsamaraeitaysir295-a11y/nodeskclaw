@@ -46,4 +46,4 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION
 EXPOSE 8000
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["/bin/sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["/bin/sh", "-c", "i=0; until .venv/bin/alembic upgrade head; do i=$((i+1)); [ $i -ge 12 ] && echo 'alembic 重试 12 次失败，放弃' && exit 1; echo \"数据库未就绪(第 $i 次)，5 秒后重试…\"; sleep 5; done && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
