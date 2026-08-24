@@ -1,5 +1,7 @@
 """Central router that aggregates all API sub-routers."""
 
+import os
+
 from fastapi import APIRouter, Depends
 
 from app.api.audit import router as audit_router
@@ -108,7 +110,14 @@ async def serve_local_file(file_key: str, expires: str = "", sig: str = ""):
     if not storage_service.verify_signature(file_key, expires, sig):
         raise ForbiddenError("签名无效或已过期", "errors.storage.signature_invalid")
 
-    file_path = storage_service._get_local_dir() / file_key
+    # 签名只证明"这个 key 是服务端自己签发过的"，不保证 key 本身不含 ../。
+    # 上传侧（storage_service._local_upload_ea 等）已用 basename 生成 key，
+    # 但签发预签名 URL 的调用方（如外部 Agent 附件）可能传入不受信任的 key
+    # 走到 get_presigned_url，这里必须再做一次目录包容性校验做纵深防御。
+    local_dir = storage_service._get_local_dir().resolve()
+    file_path = (local_dir / file_key).resolve()
+    if not str(file_path).startswith(str(local_dir) + os.sep):
+        raise ForbiddenError("非法文件路径", "errors.storage.invalid_path")
     if not file_path.is_file():
         raise NotFoundError("文件不存在", "errors.storage.file_not_found")
 

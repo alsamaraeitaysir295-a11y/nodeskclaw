@@ -1,8 +1,11 @@
 """Organization settings endpoints -- required genes & SMTP configuration."""
 
+import ipaddress
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +14,7 @@ from app.core.deps import get_db, require_feature, require_org_admin, require_or
 from app.core.security import decrypt_sensitive, encrypt_sensitive
 from app.models.base import not_deleted
 from app.models.gene import Gene
+from app.models.organization import Organization
 from app.models.org_required_gene import OrgRequiredGene
 from app.models.org_smtp_config import OrgSmtpConfig
 from app.schemas.common import ApiResponse
@@ -299,3 +303,133 @@ async def test_smtp_config(
         })
 
     return ApiResponse(message="测试邮件已发送")
+
+
+# ── 外部智能体插件 SSRF 白名单（CIDR 列表，spec §9.2 / 任务 #5）───────────────
+
+
+class ExternalAgentAllowedCidrsUpdate(BaseModel):
+    """PUT 请求体：完整覆盖组织的 SSRF 白名单。"""
+
+    cidrs: list[str] = Field(
+        default_factory=list,
+        description="CIDR 列表，如 ['10.0.0.0/8', '172.16.0.0/12']；空数组 = 拒绝所有私网",
+    )
+
+
+def _normalize_cidr(cidr: str) -> str | None:
+    """校验并规范化一条 CIDR，返回规范化字符串（统一为字符串形式）；非法返回 None。"""
+    if not isinstance(cidr, str):
+        return None
+    cidr = cidr.strip()
+    if not cidr:
+        return None
+    # ipaddress.ip_network 接受 '10.0.0.0/8' 也接受裸 IP '10.0.0.1'（按 /32 处理）；
+    # 业务上只接受显式 CIDR 形式，避免误把单点 IP 当作 CIDR 入库。
+    if "/" not in cidr:
+        return None
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return None
+    # 拒绝 /0（接受任意地址，等于关掉 SSRF 防护）
+    if net.prefix_length == 0:
+        return None
+    return str(net)
+
+
+@router.get(
+    "/{org_id}/external-agent-allowed-cidrs",
+    response_model=ApiResponse[list[str]],
+)
+async def get_external_agent_allowed_cidrs(
+    org_id: str,
+    db: AsyncSession = Depends(get_db),
+    _auth: tuple = Depends(require_org_member_role("operator")),
+):
+    """读取组织的外部智能体插件 SSRF 白名单（CIDR 列表）。
+
+    operator 及以上可读——需要让插件提交者看到本组织允许的私网段。
+    """
+    result = await db.execute(
+        select(Organization).where(
+            Organization.id == org_id,
+            not_deleted(Organization),
+        )
+    )
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(404, detail={
+            "error_code": 40460,
+            "message_key": "errors.common.not_found",
+            "message": "组织不存在",
+        })
+    return ApiResponse(data=list(org.external_agent_allowed_cidrs or []))
+
+
+@router.put(
+    "/{org_id}/external-agent-allowed-cidrs",
+    response_model=ApiResponse[list[str]],
+)
+async def set_external_agent_allowed_cidrs(
+    org_id: str,
+    body: ExternalAgentAllowedCidrsUpdate,
+    db: AsyncSession = Depends(get_db),
+    _auth: tuple = Depends(require_org_admin),
+):
+    """设置组织的外部智能体插件 SSRF 白名单（CIDR 列表，覆盖式写入）。
+
+    仅 org admin 可写（spec §9.2：威胁模型是管理员配置的 URL）。
+    入参校验：每条 CIDR 必须是合法 IPv4/IPv6 CIDR、不能是 /0。
+    即便允许了 169.254.0.0/16，云元数据地址 169.254.169.254 也仍被硬禁
+    （defense-in-depth，详见 external_agent_ssrf 模块 _HARD_BLOCKED_HOSTS）。
+    """
+    result = await db.execute(
+        select(Organization).where(
+            Organization.id == org_id,
+            not_deleted(Organization),
+        )
+    )
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(404, detail={
+            "error_code": 40460,
+            "message_key": "errors.common.not_found",
+            "message": "组织不存在",
+        })
+
+    normalized: list[str] = []
+    invalid: list[str] = []
+    seen: set[str] = set()
+    for raw in body.cidrs:
+        ok = _normalize_cidr(raw)
+        if ok is None:
+            invalid.append(raw)
+            continue
+        if ok in seen:
+            continue
+        seen.add(ok)
+        normalized.append(ok)
+
+    if invalid:
+        raise HTTPException(400, detail={
+            "error_code": 40060,
+            "message_key": "errors.external_agent.ssrf_invalid_cidr",
+            "message": f"非法 CIDR 条目: {invalid}",
+            "invalid_cidrs": invalid,
+        })
+
+    org.external_agent_allowed_cidrs = normalized
+    await db.commit()
+    await db.refresh(org)
+    await hooks.emit(
+        "operation_audit",
+        action="org.external_agent_allowed_cidrs_updated",
+        target_type="organization",
+        target_id=org_id,
+        actor_id=_auth[0].id,
+        org_id=org_id,
+        details={"cidrs": normalized},
+    )
+    return ApiResponse(data=normalized)
+
