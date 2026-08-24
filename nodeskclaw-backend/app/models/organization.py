@@ -1,6 +1,7 @@
 """Organization (tenant) model."""
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -26,6 +27,12 @@ class Organization(BaseModel):
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # 外部智能体插件的 SSRF 白名单（CIDR 列表，如 ["10.0.0.0/8", "172.16.0.0/12"]）。
+    # 默认空列表 → 拦截所有私网 / 回环地址；只有 org admin 在该字段填入私网 CIDR 后，
+    # 才能提交 endpoint 在该 CIDR 内的外部插件。
+    # 云元数据地址 169.254.169.254 / 0.0.0.0 / :: 是硬禁，不会被此字段放行。
+    external_agent_allowed_cidrs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     # relationships
     dedicated_cluster = relationship("Cluster", foreign_keys=[cluster_id])

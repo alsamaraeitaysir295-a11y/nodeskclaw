@@ -21,6 +21,9 @@ class ExternalAgentChatSession(BaseModel):
     )
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # rag_standard 协议的外部会话映射，格式 plat_{本表 id}，由平台生成，严禁使用外部
+    # 文档示例中的默认值（如 "default"）——否则所有用户共享同一外部上下文。见方案附录 A。
+    external_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class ExternalAgentMessage(BaseModel):
