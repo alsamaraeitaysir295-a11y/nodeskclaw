@@ -498,14 +498,8 @@ async def add_agent(db: AsyncSession, workspace_id: str, data: AddAgentRequest, 
     if data.hex_q is not None:
         hex_q, hex_r = data.hex_q, data.hex_r or 0
     else:
-        existing_count = await db.execute(
-            select(func.count()).select_from(WorkspaceAgent).where(
-                WorkspaceAgent.workspace_id == workspace_id,
-                WorkspaceAgent.deleted_at.is_(None),
-            )
-        )
-        count = existing_count.scalar() or 0
-        hex_q, hex_r = _spiral_next(count)
+        # 修复：查实际占用位找空格，不再用 count 推算（会导致位置冲突）
+        hex_q, hex_r = await _find_free_hex(db, workspace_id)
 
     wa = WorkspaceAgent(
         workspace_id=workspace_id,
@@ -584,6 +578,62 @@ def _spiral_next(index: int) -> tuple[int, int]:
         ring += 1
         q += 1
     return positions[index]
+
+
+async def _find_free_hex(db: AsyncSession, workspace_id: str) -> tuple[int, int]:
+    """找到工作区内第一个空闲的六边形位置（螺旋扫描，跳过已占用格）。
+
+    位置冲突是存量 bug：_spiral_next(count) 假设员工都在螺旋前 count 个位置，
+    但删除员工/模板部署/手动拖拽后位置和数量不再对应，导致分配到已占格，
+    触发 uq_node_card_hex_pos 唯一约束冲突（服务器内部错误）。
+    这里查全部实际占用位（agent + human + corridor + blackboard），螺旋找到空格。
+    """
+    from app.models.corridor import Corridor
+    from app.models.blackboard import Blackboard
+
+    # 收集全部已占用位置
+    occupied: set[tuple[int, int]] = set()
+
+    agent_positions = await db.execute(
+        select(WorkspaceAgent.hex_q, WorkspaceAgent.hex_r).where(
+            WorkspaceAgent.workspace_id == workspace_id,
+            WorkspaceAgent.deleted_at.is_(None),
+        )
+    )
+    occupied.update((q, r) for q, r in agent_positions.all())
+
+    human_positions = await db.execute(
+        select(HumanHex.hex_q, HumanHex.hex_r).where(
+            HumanHex.workspace_id == workspace_id,
+            HumanHex.deleted_at.is_(None),
+        )
+    )
+    occupied.update((q, r) for q, r in human_positions.all())
+
+    corridor_positions = await db.execute(
+        select(Corridor.hex_q, Corridor.hex_r).where(
+            Corridor.workspace_id == workspace_id,
+            Corridor.deleted_at.is_(None),
+        )
+    )
+    occupied.update((q, r) for q, r in corridor_positions.all())
+
+    blackboard_positions = await db.execute(
+        select(Blackboard.hex_q, Blackboard.hex_r).where(
+            Blackboard.workspace_id == workspace_id,
+            Blackboard.deleted_at.is_(None),
+        )
+    )
+    occupied.update((q, r) for q, r in blackboard_positions.all())
+
+    # 螺旋扫描找第一个空位
+    for i in range(200):  # 上限 200 个位置足够
+        q, r = _spiral_next(i)
+        if (q, r) not in occupied:
+            return (q, r)
+
+    # 兜底：不太可能走到这（200 个位置全满）
+    return _spiral_next(200)
 
 
 async def remove_agent(db: AsyncSession, workspace_id: str, instance_id: str) -> bool:
