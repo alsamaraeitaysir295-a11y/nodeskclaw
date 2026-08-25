@@ -495,32 +495,60 @@ async def add_agent(db: AsyncSession, workspace_id: str, data: AddAgentRequest, 
     if existing_wa.scalar_one_or_none():
         raise ValueError("该员工已在此办公室中")
 
-    if data.hex_q is not None:
-        hex_q, hex_r = data.hex_q, data.hex_r or 0
-    else:
-        # 修复：查实际占用位找空格，不再用 count 推算（会导致位置冲突）
-        hex_q, hex_r = await _find_free_hex(db, workspace_id)
+    from sqlalchemy.exc import IntegrityError as SAIntegrityError
 
-    wa = WorkspaceAgent(
-        workspace_id=workspace_id,
-        instance_id=inst.id,
-        hex_q=hex_q,
-        hex_r=hex_r,
-        display_name=data.display_name,
-    )
-    db.add(wa)
-    await db.flush()
+    placed = False
+    for _attempt in range(3):
+        if data.hex_q is not None and _attempt == 0:
+            hex_q, hex_r = data.hex_q, data.hex_r or 0
+        else:
+            hex_q, hex_r = await _find_free_hex(db, workspace_id)
 
-    await node_card_service.create_node_card(
-        db,
-        node_type="agent",
-        node_id=inst.id,
-        workspace_id=workspace_id,
-        hex_q=hex_q,
-        hex_r=hex_r,
-        name=data.display_name or inst.name,
-        metadata={"runtime": inst.runtime, "instance_id": inst.id},
-    )
+        wa = WorkspaceAgent(
+            workspace_id=workspace_id,
+            instance_id=inst.id,
+            hex_q=hex_q,
+            hex_r=hex_r,
+            display_name=data.display_name,
+        )
+        db.add(wa)
+        await db.flush()
+
+        await node_card_service.create_node_card(
+            db,
+            node_type="agent",
+            node_id=inst.id,
+            workspace_id=workspace_id,
+            hex_q=hex_q,
+            hex_r=hex_r,
+            name=data.display_name or inst.name,
+            metadata={"runtime": inst.runtime, "instance_id": inst.id},
+        )
+        # 立即 flush：让唯一约束在这里暴露，而不是被后续查询的
+        # auto-flush 延迟到不可控的位置
+        try:
+            await db.flush()
+            placed = True
+            break
+        except SAIntegrityError:
+            await db.rollback()
+            logger.warning(
+                "add_agent 位置 (%s,%s) 被占用，重试分配（第 %s 次）",
+                hex_q, hex_r, _attempt + 1,
+            )
+            # 重新加载 instance（rollback 后 session 被重置）
+            inst_result = await db.execute(
+                select(Instance).where(Instance.id == data.instance_id)
+            )
+            inst = inst_result.scalar_one()
+            # 后续重试不再用指定位置（已证明会撞），改为自动找空位
+            data = type(data)(
+                instance_id=data.instance_id,
+                display_name=data.display_name,
+            ) if hasattr(data, 'instance_id') else data
+
+    if not placed:
+        raise ValueError("无法分配空闲座位，请稍后重试")
 
     from app.services import corridor_router
     connected = await corridor_router.auto_connect_hex(
