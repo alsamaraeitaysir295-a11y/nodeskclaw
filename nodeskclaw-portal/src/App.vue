@@ -267,13 +267,13 @@ function onLocaleChange(value: string) {
       </header>
 
       <main class="flex-1">
-        <router-view />
+        <router-view :key="route.fullPath" />
       </main>
     </div>
   </template>
 
   <template v-else-if="route.meta.requiresAuth === false">
-    <router-view />
+    <router-view :key="route.fullPath" />
   </template>
 
   <template v-else>
