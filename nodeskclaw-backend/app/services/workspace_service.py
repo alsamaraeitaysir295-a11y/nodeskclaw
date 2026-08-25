@@ -583,51 +583,21 @@ def _spiral_next(index: int) -> tuple[int, int]:
 async def _find_free_hex(db: AsyncSession, workspace_id: str) -> tuple[int, int]:
     """找到工作区内第一个空闲的六边形位置（螺旋扫描，跳过已占用格）。
 
-    位置冲突是存量 bug：_spiral_next(count) 假设员工都在螺旋前 count 个位置，
-    但删除员工/模板部署/手动拖拽后位置和数量不再对应，导致分配到已占格，
-    触发 uq_node_card_hex_pos 唯一约束冲突（服务器内部错误）。
-    这里查全部实际占用位（agent + human + corridor + blackboard），螺旋找到空格。
+    直接查 node_cards 表（唯一约束所在表），比分别查四个业务表更可靠 —
+    node_cards 是所有类型（agent/human/corridor/blackboard）的统一位置记录。
     """
-    from app.models.corridor import Corridor
-    from app.models.blackboard import Blackboard
+    from app.models.node_card import NodeCard
 
-    # 收集全部已占用位置
-    occupied: set[tuple[int, int]] = set()
-
-    agent_positions = await db.execute(
-        select(WorkspaceAgent.hex_q, WorkspaceAgent.hex_r).where(
-            WorkspaceAgent.workspace_id == workspace_id,
-            WorkspaceAgent.deleted_at.is_(None),
+    result = await db.execute(
+        select(NodeCard.hex_q, NodeCard.hex_r).where(
+            NodeCard.workspace_id == workspace_id,
+            NodeCard.deleted_at.is_(None),
         )
     )
-    occupied.update((q, r) for q, r in agent_positions.all())
-
-    human_positions = await db.execute(
-        select(HumanHex.hex_q, HumanHex.hex_r).where(
-            HumanHex.workspace_id == workspace_id,
-            HumanHex.deleted_at.is_(None),
-        )
-    )
-    occupied.update((q, r) for q, r in human_positions.all())
-
-    corridor_positions = await db.execute(
-        select(Corridor.hex_q, Corridor.hex_r).where(
-            Corridor.workspace_id == workspace_id,
-            Corridor.deleted_at.is_(None),
-        )
-    )
-    occupied.update((q, r) for q, r in corridor_positions.all())
-
-    blackboard_positions = await db.execute(
-        select(Blackboard.hex_q, Blackboard.hex_r).where(
-            Blackboard.workspace_id == workspace_id,
-            Blackboard.deleted_at.is_(None),
-        )
-    )
-    occupied.update((q, r) for q, r in blackboard_positions.all())
+    occupied = {(q, r) for q, r in result.all()}
 
     # 螺旋扫描找第一个空位
-    for i in range(200):  # 上限 200 个位置足够
+    for i in range(200):
         q, r = _spiral_next(i)
         if (q, r) not in occupied:
             return (q, r)
