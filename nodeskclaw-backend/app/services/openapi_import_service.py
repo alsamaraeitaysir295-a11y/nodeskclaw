@@ -139,6 +139,26 @@ _CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
 _NAME_MAX_LEN = 128
 
 
+def _clean_summary(raw: str | None) -> str | None:
+    """清洗 summary：截取第一个分隔符之前的部分作为简洁功能名。
+
+    OpenAPI 文档的 summary 常带补充说明（如"流式问答 — 与 /stream 行为相同，备用入口"），
+    管理端和用户端只需要简洁名称（"流式问答"）；完整描述放在 description 里更合适。
+    截断到 40 字符以内，超出加省略号。
+    """
+    if not raw:
+        return raw
+    # 常见分隔符：中文破折号、英文破折号、竖线、冒号（中文）
+    for sep in ("—", " - ", " | ", "：", "："):
+        if sep in raw:
+            raw = raw.split(sep)[0].strip()
+            break
+    # 截断到 40 字符
+    if len(raw) > 40:
+        raw = raw[:37].rstrip() + "..."
+    return raw or None
+
+
 def _sanitize_name(raw: str) -> str:
     """把任意字符串清洗为合法 function name。
 
@@ -576,8 +596,8 @@ def _parse_openapi_3_operation(
         sanitized = _fallback_name(method, path)
     name = sanitized or _fallback_name(method, path)
 
-    # 2) summary
-    summary = op.get("summary") or op.get("description")
+    # 2) summary：清洗为简洁功能名（截断分隔符后的补充说明）
+    summary = _clean_summary(op.get("summary") or op.get("description"))
 
     # 3) fields：合并 path-level 与 operation-level parameters，operation 优先
     merged_params = _merge_openapi_3_parameters(path_level_params, op.get("parameters") or [])
@@ -1013,7 +1033,7 @@ def _parse_swagger_2_operation(
         sanitized = _fallback_name(method, path)
     name = sanitized or _fallback_name(method, path)
 
-    summary = op.get("summary") or op.get("description")
+    summary = _clean_summary(op.get("summary") or op.get("description"))
 
     fields: list[FieldDraft] = []
     seen: set[str] = set()

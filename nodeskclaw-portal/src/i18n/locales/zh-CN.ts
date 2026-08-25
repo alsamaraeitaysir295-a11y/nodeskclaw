@@ -2673,6 +2673,7 @@ const zhCN = {
         point4: "支持 OpenAPI 3.x 和 Swagger 2.0，AI 也可以按此格式自动生成",
         fillExample: "填入示例（可直接修改）",
         downloadSpec: "下载示例 JSON",
+        downloadFormatSpec: "下载格式规范",
       },
       stepTitle: "从 OpenAPI 导入",
       stepDescription:

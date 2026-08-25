@@ -2662,6 +2662,7 @@ const enUS = {
         point4: "Supports OpenAPI 3.x and Swagger 2.0; AI can also generate this format automatically",
         fillExample: "Fill example (edit and use)",
         downloadSpec: "Download example JSON",
+        downloadFormatSpec: "Download format spec",
       },
       stepTitle: "Import from OpenAPI",
       stepDescription:

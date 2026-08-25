@@ -253,6 +253,76 @@ function downloadSpec() {
   URL.revokeObjectURL(url)
 }
 
+const FORMAT_SPEC_MD = [
+  '# OpenAPI 导入格式规范（精简版）',
+  '',
+  '## 支持范围',
+  '- OpenAPI 3.0/3.1 + Swagger 2.0',
+  '- 贴 URL 或直接粘贴 JSON（≤5MB）',
+  '',
+  '## 字段映射规则',
+  '',
+  '| OpenAPI 定义 | 平台效果 |',
+  '|---|---|',
+  '| parameter 的 description | 字段中文名（表单标签） |',
+  '| schema 的 example | 输入框灰字提示 |',
+  '| type: string + enum | 下拉框 |',
+  '| type: string + format: date | 日期选择器 |',
+  '| type: string + format: binary | 文件上传 |',
+  '| type: integer/number | 数字输入 |',
+  '| type: boolean | 开关 |',
+  '| type: array/object | JSON 多行文本 |',
+  '| 响应含 answer 字符串 | Markdown 文档渲染 |',
+  '',
+  '## 必须遵守',
+  '',
+  '1. servers[0].url 必须是绝对地址（http://...）',
+  '2. 禁止 allOf/oneOf/anyOf（字段会被跳过）',
+  '3. 鉴权不要用 header 参数（走平台统一配置）',
+  '4. file 字段不要配 default',
+  '5. 响应含 answer 字段 → 自动 Markdown 渲染',
+  '',
+  '## 最小示例',
+  '',
+  '    {',
+  '      "openapi": "3.0.0",',
+  '      "info": {"title": "系统名", "version": "1.0"},',
+  '      "servers": [{"url": "http://你的服务地址:端口"}],',
+  '      "paths": {',
+  '        "/api/xxx": {',
+  '          "get": {',
+  '            "operationId": "getXxx",',
+  '            "summary": "简洁功能名",',
+  '            "parameters": [{',
+  '              "name": "param1", "in": "query",',
+  '              "description": "参数中文名",',
+  '              "schema": {"type": "string", "example": "示例值"}',
+  '            }],',
+  '            "responses": {"200": {"description": "ok"}}',
+  '          }',
+  '        }',
+  '      }',
+  '    }',
+  '',
+  '## 给 AI 的提示词模板',
+  '',
+  '"请根据以下接口文档，生成一份符合 OpenAPI 3.0 规范的 JSON 文件。',
+  '要求：每个参数都写中文 description 和 example；响应如果包含完整文本回答，',
+  '在 200 响应的 schema 里定义一个 answer 字符串字段；不要使用 allOf。"',
+  '',
+  '完整版规范请联系平台管理员获取。',
+].join('\n') + '\n'
+
+function downloadFormatSpec() {
+  const blob = new Blob([FORMAT_SPEC_MD], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'OpenAPI导入格式规范.md'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 async function runImportPreview() {
   importError.value = null
   importPreview.value = null
@@ -448,6 +518,15 @@ defineExpose({
           >
             <Download class="w-3 h-3" />
             {{ t('externalAgentWizard.import.guide.downloadSpec') }}
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs text-foreground hover:bg-muted/50"
+            data-testid="import-download-format-spec"
+            @click="downloadFormatSpec"
+          >
+            <Download class="w-3 h-3" />
+            {{ t('externalAgentWizard.import.guide.downloadFormatSpec') }}
           </button>
         </div>
       </div>
