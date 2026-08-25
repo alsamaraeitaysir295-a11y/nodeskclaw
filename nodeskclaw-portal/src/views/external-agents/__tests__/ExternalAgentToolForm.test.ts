@@ -905,6 +905,12 @@ describe('调用历史', () => {
     }
   }
 
+  // 历史默认折叠，先点开关再断言内容
+  async function openHistory(wrapper: any) {
+    await wrapper.find('[data-testid="invoke-history-toggle"]').trigger('click')
+    await flushPromises()
+  }
+
   it('挂载时拉取历史（limit=10）并渲染条目：时间 + 功能名 + 成败徽标 + 参数摘要', async () => {
     listInvocations.mockResolvedValueOnce([
       makeHistoryItem(),
@@ -917,6 +923,7 @@ describe('调用历史', () => {
       }),
     ])
     const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    await openHistory(wrapper)
 
     expect(listInvocations).toHaveBeenCalledWith('agent-1', 10)
     const section = wrapper.find('[data-testid="invoke-history"]')
@@ -939,6 +946,7 @@ describe('调用历史', () => {
   it('空历史显示空状态', async () => {
     listInvocations.mockResolvedValueOnce([])
     const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    await openHistory(wrapper)
     expect(wrapper.find('[data-testid="invoke-history-empty"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('pluginForm.history.empty')
   })
@@ -946,6 +954,7 @@ describe('调用历史', () => {
   it('历史加载失败仅在区块内提示，不影响表单', async () => {
     listInvocations.mockRejectedValueOnce(new Error('network down'))
     const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    await openHistory(wrapper)
     expect(wrapper.find('form').exists()).toBe(true)
     expect(wrapper.find('[data-testid="invoke-history-error"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('pluginForm.history.loadFailed')
@@ -954,6 +963,7 @@ describe('调用历史', () => {
   it('点击条目展开完整结果（PluginResult 收到存档响应）', async () => {
     listInvocations.mockResolvedValueOnce([makeHistoryItem()])
     const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    await openHistory(wrapper)
 
     // 初始不展开
     expect(wrapper.find('[data-testid="invoke-history-detail-inv-1"]').exists()).toBe(false)
@@ -984,6 +994,7 @@ describe('调用历史', () => {
       }),
     ])
     const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+    await openHistory(wrapper)
     await wrapper.find('[data-testid="invoke-history-item-inv-1"]').trigger('click')
     const detail = wrapper.find('[data-testid="invoke-history-detail-inv-1"]')
     expect(detail.exists()).toBe(true)
@@ -1005,12 +1016,21 @@ describe('调用历史', () => {
     expect(listInvocations).toHaveBeenLastCalledWith('agent-1', 10)
   })
 
-  it('折叠开关：点击头部隐藏列表', async () => {
+  it('折叠开关：默认折叠，点击头部展开再收起', async () => {
     listInvocations.mockResolvedValueOnce([makeHistoryItem()])
     const wrapper = await mountForm(makeForm({ input_schema: { order: [], fields: {} } }))
+
+    // 默认折叠：列表不渲染
+    expect(wrapper.find('[data-testid="invoke-history-list"]').exists()).toBe(false)
+
+    // 点开
+    await wrapper.find('[data-testid="invoke-history-toggle"]').trigger('click')
     expect(wrapper.find('[data-testid="invoke-history-list"]').exists()).toBe(true)
+
+    // 再点收起
     await wrapper.find('[data-testid="invoke-history-toggle"]').trigger('click')
     expect(wrapper.find('[data-testid="invoke-history-list"]').exists()).toBe(false)
+
     // 标题仍在（卡片本体保留）
     expect(wrapper.find('[data-testid="invoke-history"]').text()).toContain('pluginForm.history.title')
   })

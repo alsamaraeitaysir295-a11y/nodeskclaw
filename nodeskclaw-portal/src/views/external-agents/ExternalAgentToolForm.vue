@@ -145,10 +145,11 @@ const submitting = ref(false)
 const response = ref<ToolInvokeResponse | null>(null)
 
 // ── 调用历史（仅本人可见，agent 级：覆盖该插件全部 function） ─────────────────
+// 默认折叠，只保留最近 10 条，避免页面过长
 const history = ref<InvocationHistoryItem[]>([])
 const historyLoading = ref(false)
 const historyError = ref<string | null>(null)
-const historyOpen = ref(true)
+const historyOpen = ref(false)
 const expandedHistoryId = ref<string | null>(null)
 
 async function loadHistory() {
@@ -892,7 +893,7 @@ const selectedFunction = computed(() =>
                 :class="expandedHistoryId === item.id && 'rotate-180'"
               />
             </button>
-            <!-- 展开重放：result_data 即当时的完整 invoke 响应 -->
+            <!-- 展开重放：result_data 即当时的完整 invoke 响应（不设滚动，自然展开） -->
             <div
               v-if="expandedHistoryId === item.id"
               class="space-y-2 px-4 pb-4"
@@ -908,7 +909,7 @@ const selectedFunction = computed(() =>
               <p v-if="item.error_message" class="text-xs text-destructive">
                 {{ item.error_message }}
               </p>
-              <div class="max-h-[50vh] overflow-auto rounded-md border border-border bg-background p-3">
+              <div class="rounded-md border border-border bg-background p-3">
                 <PluginResult
                   :response="historyResponse(item)"
                   :display="historyDisplay(item)"
