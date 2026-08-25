@@ -205,18 +205,18 @@ async function loadFunctions() {
   try {
     const list = await externalAgentFunctionApi.list(agentId)
     functions.value = list
-    if (list.length === 0) {
-      topLevelError.value = t('pluginForm.noFunctions')
+    // 用户端只关心已启用的功能；全部 draft/disabled 时显示引导态
+    const activeList = list.filter((f) => f.status === 'active')
+    if (activeList.length === 0) {
+      if (list.length === 0) {
+        topLevelError.value = t('pluginForm.noFunctions')
+      } else {
+        noActiveFunction.value = true
+      }
       return
     }
-    // 默认选中第一个 active 功能；若一个都没有（全部 draft/disabled），
-    // 不去调 form 接口（会 403），改为展示"去管理页启用"引导态
-    const initial = list.find((f) => f.status === 'active')
-    if (!initial) {
-      noActiveFunction.value = true
-      return
-    }
-    await selectFunction(initial.id)
+    // 默认选中第一个 active 功能
+    await selectFunction(activeList[0].id)
   } catch (e: unknown) {
     topLevelError.value = apiErrorMessage(e)
   } finally {
@@ -226,12 +226,6 @@ async function loadFunctions() {
 
 async function selectFunction(functionId: string) {
   if (functionId === selectedFunctionId.value) return
-  // 未启用的功能点开只会 403，前端直接给出引导提示，不发请求
-  const target = functions.value.find((f) => f.id === functionId)
-  if (target && target.status !== 'active') {
-    topLevelError.value = t('pluginForm.functionNotActiveHint')
-    return
-  }
   selectedFunctionId.value = functionId
   loadingFunctionId.value = functionId
   // 清掉旧表单状态（review §8.2：切换 function 即清 values/errors/response/file）
@@ -510,7 +504,10 @@ function selectOptionsFor(field: ToolInputField) {
 }
 
 // 是否展示 function 选择器：仅当多 function 时（review C5：单 function 保持现状 UX）
-const showFunctionSelector = computed(() => functions.value.length > 1)
+// 用户端只显示已启用的功能；draft/disabled 一律隐藏（管理端才可见全部）
+const activeFunctions = computed(() => functions.value.filter((f) => f.status === 'active'))
+
+const showFunctionSelector = computed(() => activeFunctions.value.length > 1)
 
 // 当前选中的 function 元信息（用于头部展示）
 const selectedFunction = computed(() =>
@@ -546,14 +543,14 @@ const selectedFunction = computed(() =>
       </h1>
     </header>
 
-    <!-- Phase 2 §8.2：function 选择器（仅多 function 时渲染，单 function 保持原 UX） -->
+    <!-- Phase 2 §8.2：function 选择器（仅多 active function 时渲染；draft/disabled 对用户隐藏） -->
     <div v-if="showFunctionSelector" class="function-selector">
       <div class="flex items-center gap-2 text-xs text-muted-foreground mb-2">
         <span>{{ t('pluginForm.functionSelector.label') }}</span>
       </div>
       <div class="flex flex-wrap gap-2 border-b border-border">
         <button
-          v-for="fn in functions"
+          v-for="fn in activeFunctions"
           :key="fn.id"
           type="button"
           :class="[
@@ -561,7 +558,6 @@ const selectedFunction = computed(() =>
             fn.id === selectedFunctionId
               ? 'border-primary text-primary font-medium'
               : 'border-transparent text-muted-foreground hover:text-foreground',
-            fn.status !== 'active' && 'opacity-60 cursor-not-allowed',
           ]"
           :disabled="loadingFunctionId === fn.id"
           :data-test="`function-tab-${fn.id}`"
@@ -569,12 +565,6 @@ const selectedFunction = computed(() =>
         >
           <Loader2 v-if="loadingFunctionId === fn.id" class="w-3.5 h-3.5 animate-spin" />
           <span>{{ fn.summary || fn.name }}</span>
-          <span
-            v-if="fn.status !== 'active'"
-            class="ml-1 text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground"
-          >
-            {{ t('pluginForm.functionStatus.inactive') }}
-          </span>
         </button>
       </div>
     </div>

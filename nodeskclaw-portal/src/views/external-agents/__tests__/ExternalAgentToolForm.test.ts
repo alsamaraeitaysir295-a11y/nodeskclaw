@@ -555,8 +555,9 @@ describe('function 选择器 (Phase 2 §8.2)', () => {
     await flushPromises()
     // 选中的 tab 是 fn-active（第一个 active），getForm 应被以 fn-active 调用
     expect(getFunctionForm).toHaveBeenCalledWith('agent-1', 'fn-active')
+    // 用户端只渲染 active 的 tab（draft 隐藏）
     const tabs = wrapper.findAll('button[data-test^="function-tab-"]')
-    expect(tabs.length).toBe(3)
+    expect(tabs.length).toBe(2)
   })
 
   it('没有 active function 时展示"去管理页启用"引导态，不调 form 接口（不裸 403）', async () => {
@@ -576,9 +577,10 @@ describe('function 选择器 (Phase 2 §8.2)', () => {
     expect(wrapper.text()).toContain('pluginForm.noActiveFunction')
   })
 
-  it('点击未启用的功能 tab 给出引导提示，不发 form 请求', async () => {
+  it('未启用的功能 tab 不渲染（用户端隐藏 draft/disabled）', async () => {
     listFunctions.mockResolvedValueOnce([
       makeFunctionListItem({ id: 'fn-a', name: 'A', status: 'active' }),
+      makeFunctionListItem({ id: 'fn-b', name: 'B', status: 'active' }),
       makeFunctionListItem({ id: 'fn-draft', name: 'D', status: 'draft' }),
     ])
     getFunctionForm.mockResolvedValue(
@@ -592,11 +594,12 @@ describe('function 选择器 (Phase 2 §8.2)', () => {
     await flushPromises()
     expect(getFunctionForm).toHaveBeenCalledTimes(1) // 仅初始 fn-a
 
+    // draft 功能的 tab 不存在（用户端隐藏）
     const draftTab = wrapper.find('button[data-test="function-tab-fn-draft"]')
-    await draftTab.trigger('click')
-    await flushPromises()
-    expect(getFunctionForm).toHaveBeenCalledTimes(1) // 未发新请求
-    expect(wrapper.text()).toContain('pluginForm.functionNotActiveHint')
+    expect(draftTab.exists()).toBe(false)
+    // 只渲染 active 的 tab（2 个 active）
+    const tabs = wrapper.findAll('button[data-test^="function-tab-"]')
+    expect(tabs.length).toBe(2)
   })
 
   it('点击其它 tab 触发 selectFunction + 重新拉表单', async () => {
@@ -644,7 +647,7 @@ describe('function 选择器 (Phase 2 §8.2)', () => {
     expect(wrapper.html()).toMatch(/pluginForm\.noFunctions/)
   })
 
-  it('非 active function 渲染 "Inactive" 标签', async () => {
+  it('非 active function 不渲染 tab（用户端完全隐藏 draft/disabled）', async () => {
     listFunctions.mockResolvedValueOnce([
       makeFunctionListItem({ id: 'fn-active', name: 'A', status: 'active' }),
       makeFunctionListItem({ id: 'fn-draft', name: 'B', status: 'draft' }),
@@ -658,7 +661,10 @@ describe('function 选择器 (Phase 2 §8.2)', () => {
       },
     })
     await flushPromises()
-    expect(wrapper.html()).toMatch(/pluginForm\.functionStatus\.inactive/)
+    // draft 功能的 tab 完全不存在
+    expect(wrapper.find('button[data-test="function-tab-fn-draft"]').exists()).toBe(false)
+    // 不显示 Inactive 标签（因为 tab 本身就没了）
+    expect(wrapper.html()).not.toMatch(/pluginForm\.functionStatus\.inactive/)
   })
 })
 describe('ExternalAgentToolForm – 未启用 403 引导', () => {
