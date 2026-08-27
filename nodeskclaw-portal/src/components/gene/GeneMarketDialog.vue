@@ -329,6 +329,18 @@ const sortSelectOptions = computed(() =>
   sortOptions.map(s => ({ value: s, label: getSortLabel(s) }))
 )
 
+// 归属下拉选项：value 与 scopeMode 的取值一致（注意此处 org 对应 API 的 org_private，映射见 effectiveVisibility）
+const scopeSelectOptions = computed<{ value: ScopeMode; label: string }[]>(() => [
+  { value: 'public', label: t('geneMarket.scopePublic') },
+  { value: 'org', label: t('geneMarket.scopeOrg') },
+  { value: 'personal', label: t('geneMarket.scopePersonal') },
+])
+
+// CustomSelect 的 update 事件回传 string | null，这里收窄回 ScopeMode 联合类型
+function setScopeMode(value: string | null) {
+  if (value === 'personal' || value === 'org' || value === 'public') scopeMode.value = value
+}
+
 const iconMap: Record<string, typeof Package> = {
   code: Code, database: Database, cpu: Cpu, server: Server,
   shield: Shield, zap: Zap, wrench: Wrench, palette: Palette,
@@ -503,61 +515,48 @@ onUnmounted(() => {
           <template v-if="viewState === 'list'">
             <div class="flex h-full min-h-0 flex-col">
               <div class="flex-1 min-h-0 overflow-y-auto">
-                <!-- Tabs -->
-                <div class="flex items-center gap-2 mb-3">
-                  <button
-                    :class="['px-4 py-2 rounded-lg text-sm font-medium transition-colors', viewMode === 'genes' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
-                    @click="viewMode = 'genes'"
-                  >
-                    {{ t('geneMarket.tabGenes') }}
-                  </button>
-                  <button
-                    :class="['px-4 py-2 rounded-lg text-sm font-medium transition-colors', viewMode === 'genomes' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
-                    @click="viewMode = 'genomes'"
-                  >
-                    {{ t('geneMarket.tabGenomes') }}
-                  </button>
-                </div>
-
-                <!-- Scope tabs: 个人 library / 组织 library / 公共市场（仅 genes 视图） -->
-                <div v-if="viewMode === 'genes'" class="flex items-center gap-1 mb-4 p-1 rounded-lg bg-muted/40 w-fit">
-                  <button
-                    :class="['px-3 py-1.5 rounded-md text-xs font-medium transition-colors', scopeMode === 'public' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
-                    @click="scopeMode = 'public'"
-                  >
-                    {{ t('geneMarket.scopePublic') }}
-                  </button>
-                  <button
-                    :class="['px-3 py-1.5 rounded-md text-xs font-medium transition-colors', scopeMode === 'org' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
-                    @click="scopeMode = 'org'"
-                  >
-                    {{ t('geneMarket.scopeOrg') }}
-                  </button>
-                  <button
-                    :class="['px-3 py-1.5 rounded-md text-xs font-medium transition-colors', scopeMode === 'personal' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
-                    @click="scopeMode = 'personal'"
-                  >
-                    {{ t('geneMarket.scopePersonal') }}
-                  </button>
-                </div>
-
-                <!-- Filters -->
-                <div class="flex flex-wrap gap-3 mb-4">
-                  <div class="relative flex-1 min-w-[180px]">
-                    <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <input
-                      v-model="keyword"
-                      type="text"
-                      :placeholder="t('geneMarket.searchPlaceholder')"
-                      class="w-full pl-10 pr-4 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
-                    />
+                <!-- 顶部工具栏：视图 Tab + 筛选合并为一行（窄屏 flex-wrap 换行），与技能市场主页同款模式 -->
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
+                  <!-- 视图 Tab：技能 / 基因组 -->
+                  <div class="flex gap-1">
+                    <button
+                      :class="['px-3 py-1.5 rounded-lg text-sm font-medium transition-colors', viewMode === 'genes' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
+                      @click="viewMode = 'genes'"
+                    >
+                      {{ t('geneMarket.tabGenes') }}
+                    </button>
+                    <button
+                      :class="['px-3 py-1.5 rounded-lg text-sm font-medium transition-colors', viewMode === 'genomes' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
+                      @click="viewMode = 'genomes'"
+                    >
+                      {{ t('geneMarket.tabGenomes') }}
+                    </button>
                   </div>
-                  <CustomSelect
-                    v-if="viewMode === 'genes'"
-                    v-model="selectedCategory"
-                    :options="categorySelectOptions"
-                  />
-                  <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
+
+                  <!-- 搜索 + 归属 + 分类 + 排序：靠右排布（归属/分类仅 genes 视图） -->
+                  <div class="flex flex-1 flex-wrap items-center justify-end gap-2 min-w-[260px]">
+                    <div class="relative w-44 max-w-full">
+                      <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <input
+                        v-model="keyword"
+                        type="text"
+                        :placeholder="t('geneMarket.searchPlaceholder')"
+                        class="w-full pl-9 pr-3 py-1.5 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+                      />
+                    </div>
+                    <CustomSelect
+                      v-if="viewMode === 'genes'"
+                      :model-value="scopeMode"
+                      :options="scopeSelectOptions"
+                      @update:model-value="setScopeMode"
+                    />
+                    <CustomSelect
+                      v-if="viewMode === 'genes'"
+                      v-model="selectedCategory"
+                      :options="categorySelectOptions"
+                    />
+                    <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
+                  </div>
                 </div>
 
                 <!-- Loading -->

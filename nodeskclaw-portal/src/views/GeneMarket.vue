@@ -175,6 +175,13 @@ function onLocalFolderInput(e: Event) {
 
 const categories = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
 
+// 视图 Tab 选项：技能 / AI员工 / 本地上传（value 类型与 viewMode 联合类型保持一致）
+const viewModeTabs: { value: 'genes' | 'templates' | 'local'; key: string }[] = [
+  { value: 'genes', key: 'geneMarket.tabGenes' },
+  { value: 'templates', key: 'geneMarket.tabTemplates' },
+  { value: 'local', key: 'geneMarket.tabLocal' },
+]
+
 const sortOptions = ['popularity', 'rating', 'effectiveness', 'newest']
 
 const geneMetaKeyMap: Record<string, string> = {
@@ -215,6 +222,13 @@ function getSortLabel(value: string) {
 const categorySelectOptions = computed(() => [
   { value: null, label: t('geneMarket.allCategories') },
   ...categories.map(c => ({ value: c, label: localizeGeneMeta(c) })),
+])
+
+// 归属过滤下拉选项：value 与 selectedVisibility 的取值（public / org_private / personal）保持一致
+const visibilitySelectOptions = computed(() => [
+  { value: 'public', label: t('geneMarket.scopePublic') },
+  { value: 'org_private', label: t('geneMarket.scopeOrg') },
+  { value: 'personal', label: t('geneMarket.scopePersonal') },
 ])
 
 const sortSelectOptions = computed(() =>
@@ -542,77 +556,39 @@ function hasNativeTools(gene: GeneItem): boolean {
       <!-- 页面标题 -->
       <h1 class="text-2xl font-bold mb-6">{{ t('geneMarket.title') }}</h1>
 
-      <!-- 顶部 Tab 切换 -->
-      <div class="flex gap-2 mb-6">
-        <button
-          :class="[
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            viewMode === 'genes'
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-          ]"
-          @click="viewMode = 'genes'"
-        >
-          {{ t('geneMarket.tabGenes') }}
-        </button>
-        <button
-          :class="[
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            viewMode === 'templates'
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-          ]"
-          @click="viewMode = 'templates'"
-        >
-          {{ t('geneMarket.tabTemplates') }}
-        </button>
-        <button
-          :class="[
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            viewMode === 'local'
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-          ]"
-          @click="viewMode = 'local'"
-        >
-          {{ t('geneMarket.tabLocal') }}
-        </button>
-      </div>
-
-      <!-- 基因/模板/本地上传 Tab -->
-
-        <!-- 归属三栏 Tab：个人 library / 组织 library / 公共市场（仅 genes/templates 视图） -->
-        <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex gap-2 mb-4">
+      <!-- 顶部工具栏：视图 Tab + 归属过滤 + 搜索筛选合并为一行，减少纵向占用；
+           窄屏时 flex-wrap 自动换行 -->
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-6">
+        <!-- 视图 Tab：技能 / AI员工 / 本地上传 -->
+        <div class="flex gap-1">
           <button
-            v-for="vis in [
-              { value: 'public', key: 'geneMarket.scopePublic' },
-              { value: 'org_private', key: 'geneMarket.scopeOrg' },
-              { value: 'personal', key: 'geneMarket.scopePersonal' },
-            ]"
-            :key="vis.value"
+            v-for="mode in viewModeTabs"
+            :key="mode.value"
             :class="[
-              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              selectedVisibility === vis.value
+              'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+              viewMode === mode.value
                 ? 'bg-primary/10 text-primary'
-                : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted',
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted',
             ]"
-            @click="selectedVisibility = vis.value"
+            @click="viewMode = mode.value"
           >
-            {{ t(vis.key) }}
+            {{ t(mode.key) }}
           </button>
         </div>
 
-        <!-- 搜索和筛选栏 -->
-        <div class="flex flex-wrap gap-3 mb-6">
-          <div class="relative flex-1 min-w-[200px]">
+        <!-- 搜索 + 归属 + 分类 + 排序：靠右排布（本地上传视图无列表可筛，不展示） -->
+        <div v-if="viewMode !== 'local'" class="flex flex-1 flex-wrap items-center justify-end gap-2 min-w-[280px]">
+          <div class="relative w-52 max-w-full">
             <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
               v-model="keyword"
               type="text"
               :placeholder="t('geneMarket.searchPlaceholder')"
-              class="w-full pl-10 pr-4 py-2 rounded-lg border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              class="w-full pl-9 pr-3 py-1.5 rounded-lg border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
+
+          <CustomSelect v-model="selectedVisibility" :options="visibilitySelectOptions" />
 
           <CustomSelect
             v-if="viewMode === 'genes'"
@@ -622,6 +598,7 @@ function hasNativeTools(gene: GeneItem): boolean {
 
           <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
         </div>
+      </div>
 
         <div v-if="store.loading" class="flex justify-center py-20">
           <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
