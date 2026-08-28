@@ -6,9 +6,9 @@
       <p class="text-sm text-muted-foreground mt-0.5">平台操作审计流水，点击行展开详情</p>
     </div>
 
-    <!-- 筛选区：带标签的输入组（替代裸输入框；datetime-local 原生 placeholder 因系统 locale
-         会显示成 yyyy/mm/日 --:-- 的混排，用外层标签说明用途，弱化输入框内部占位） -->
-    <div class="flex flex-wrap items-end gap-3">
+    <!-- 筛选区：时间改为预设段 pill 组（与员工协作空间的样式一致），
+         替代原生 datetime-local（其占位符随系统 locale 显示成 yyyy/mm/日 --:-- 的混排） -->
+    <div class="flex flex-wrap items-center gap-3">
       <div class="w-44">
         <label class="block text-xs font-medium text-muted-foreground mb-1">操作人</label>
         <div class="relative">
@@ -33,28 +33,39 @@
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-muted-foreground mb-1">开始时间</label>
-        <input
-          v-model="fromTs"
-          type="datetime-local"
-          class="h-9 px-2.5 rounded-lg border border-border bg-background text-sm text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-        />
+        <label class="block text-xs font-medium text-muted-foreground mb-1">起始日期</label>
+        <div class="relative">
+          <Calendar class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            v-model="fromTs"
+            type="date"
+            class="h-9 w-36 pl-8 pr-2.5 rounded-lg border border-border bg-background text-sm text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            @change="reload(1)"
+          />
+        </div>
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-muted-foreground mb-1">结束时间</label>
-        <input
-          v-model="toTs"
-          type="datetime-local"
-          class="h-9 px-2.5 rounded-lg border border-border bg-background text-sm text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-        />
+        <label class="block text-xs font-medium text-muted-foreground mb-1">截止日期</label>
+        <div class="relative">
+          <Calendar class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            v-model="toTs"
+            type="date"
+            class="h-9 w-36 pl-8 pr-2.5 rounded-lg border border-border bg-background text-sm text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            @change="reload(1)"
+          />
+        </div>
       </div>
 
       <button
-        class="h-9 px-4 rounded-lg border border-border text-sm hover:border-primary/50 hover:text-primary transition-colors"
-        @click="reload(1)"
+        v-if="fromTs || toTs"
+        class="h-9 self-end px-2.5 rounded-lg text-xs text-muted-foreground hover:text-foreground transition-colors"
+        title="清除时间筛选"
+        @click="fromTs = ''; toTs = ''; reload(1)"
       >
-        查询
+        <X class="w-3.5 h-3.5 inline" />
+        清除
       </button>
     </div>
 
@@ -88,9 +99,15 @@
               <td class="px-4 py-3 text-muted-foreground">
                 {{ r.target_type ? localizeTargetType(r.target_type) : '-' }}:{{ truncate(r.target_id) }}
               </td>
-              <td class="px-4 py-3 text-muted-foreground">
-                <span v-if="r.details?.status != null" class="text-xs tabular-nums">{{ r.details.status }}</span>
-                <span v-else class="text-muted-foreground/60">-</span>
+              <td class="px-4 py-3">
+                <span
+                  class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                  :class="statusOf(r).ok
+                    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+                    : 'bg-red-500/15 text-red-500'"
+                >
+                  {{ statusOf(r).label }}
+                </span>
               </td>
             </tr>
             <!-- 展开行：以 pre 展示 details JSON -->
@@ -131,7 +148,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search } from 'lucide-vue-next'
+import { Search, Calendar, X } from 'lucide-vue-next'
 import { useAdminApi, type AdminAuditRow } from '@/services/adminApi'
 import CustomSelect, { type SelectOption } from '@/components/shared/CustomSelect.vue'
 
@@ -160,7 +177,21 @@ function truncate(s: string | null | undefined, max = 12): string {
   return s.length > max ? s.slice(0, max) + '...' : s
 }
 
-// 筛选条件
+/** 状态列推导：审计 details 没有统一的 status 字段（仅个别事件带），
+ * 按多个信号归一——ok/reachable=false 或带 error 为失败，其余视为成功
+ * （审计记录在操作成功完成后写入，失败路径要么带错误字段要么不落审计） */
+function statusOf(r: AdminAuditRow): { label: string; ok: boolean } {
+  const d = (r.details ?? {}) as Record<string, unknown>
+  if (typeof d.status === 'string' && d.status) {
+    return { label: d.status, ok: d.status === 'success' }
+  }
+  if (d.ok === false) return { label: '失败', ok: false }
+  if (d.reachable === false) return { label: '不可达', ok: false }
+  if (d.error || d.error_message) return { label: '失败', ok: false }
+  return { label: '成功', ok: true }
+}
+
+// 筛选条件（日期粒度：起始日 00:00:00 ~ 截止日 23:59:59，本地时区转 ISO UTC 交给后端比较）
 const actor = ref('')
 const action = ref<string | null>(null)
 const fromTs = ref('')
@@ -187,9 +218,9 @@ async function reload(p = page.value) {
   const res = await api.fetchAuditLogs({
     actor: actor.value || undefined,
     action: action.value || undefined,
-    // datetime-local 输入的是不带时区的本地时间字符串，必须转成 ISO UTC 才能跟后端时间比较对上
-    from: fromTs.value ? new Date(fromTs.value).toISOString() : undefined,
-    to: toTs.value ? new Date(toTs.value).toISOString() : undefined,
+    // date 输入为本地日期字符串，起始日取当天 00:00、截止日取当天 23:59:59，转 ISO UTC
+    from: fromTs.value ? new Date(`${fromTs.value}T00:00:00`).toISOString() : undefined,
+    to: toTs.value ? new Date(`${toTs.value}T23:59:59`).toISOString() : undefined,
     page: p,
     pageSize: pageSize.value,
   })
