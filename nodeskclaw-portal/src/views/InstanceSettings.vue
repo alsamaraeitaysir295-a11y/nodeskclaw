@@ -162,6 +162,28 @@ async function loadAll() {
       })
     }
 
+    // 组织已配置、但该实例尚未添加过的供应商：默认以组织 Key 形态直接展示，
+    // 免去逐个手动添加（连接信息取组织配置；点保存后才会写入实例配置）
+    for (const p of orgKeyProviders.value) {
+      if (configs.some(c => c.provider === p)) continue
+      const pk = personalKeyForProvider(p)
+      const orgDetail = orgProviderDetails.value[p]
+      const isCustom = !ALL_KNOWN_PROVIDERS.has(p)
+      configs.push({
+        provider: p,
+        keySource: isCodexProvider(p) ? 'personal' : 'org',
+        personalKeyNew: '',
+        personalKeyMasked: pk?.api_key_masked ?? '',
+        hasExistingPersonalKey: !!pk,
+        baseUrl: orgDetail?.base_url ?? pk?.base_url ?? '',
+        apiType: orgDetail?.api_type ?? pk?.api_type ?? (isCustom ? 'openai-completions' : ''),
+        isCustom,
+        showBaseUrl: isCustom || !!(orgDetail?.base_url || pk?.base_url),
+        selectedModel: defaultModelForProvider(p),
+        skipSslVerify: orgDetail?.skip_ssl_verify ?? pk?.skip_ssl_verify ?? false,
+      })
+    }
+
     for (const c of configs) {
       if (c.keySource === 'org' && !isOrgKeyAvailable(c.provider)) {
         c.keySource = 'personal'
@@ -276,8 +298,19 @@ async function handleFetchModels(provider: string, callback: (models: ModelItem[
       const allowedSet = new Set(allowed)
       models = models.filter(m => allowedSet.has(m.id))
     }
+    // 兜底：目录拉不到（中转站常不提供 /models 接口）或过滤后为空时，
+    // 用组织 Key 上配置的模型清单直接作为可选项，保证供应商仍然可用
+    if (models.length === 0 && allowed && allowed.length > 0) {
+      callback(allowed.map(id => ({ id, name: id })))
+      return
+    }
     callback(models, msg || undefined)
   } catch (e: any) {
+    const allowed = orgAllowedModels.value[provider]
+    if (allowed && allowed.length > 0) {
+      callback(allowed.map(id => ({ id, name: id })))
+      return
+    }
     callback([], e?.response?.data?.message ?? t('llm.fetchModelsFailed'))
   }
 }

@@ -186,6 +186,7 @@ async def create_model_provider(
         org_token_limit=body.org_token_limit,
         system_token_limit=body.system_token_limit,
         skip_ssl_verify=body.skip_ssl_verify,
+        allowed_models=body.allowed_models,
         is_platform_managed=False,  # 组织端创建恒为 BYOK；平台托管由 EE admin 路由下发
         created_by=user.id,
     )

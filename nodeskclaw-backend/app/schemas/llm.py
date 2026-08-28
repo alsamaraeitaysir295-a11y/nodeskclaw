@@ -37,6 +37,9 @@ class OrgModelProviderCreate(BaseModel):
     org_token_limit: int | None = None
     system_token_limit: int | None = None
     skip_ssl_verify: bool = False
+    # 可选模型清单：中转站等不支持 /models 自动发现的 API 地址由管理员手动指定，
+    # AI 员工侧选型时以此为准（目录可正常拉取时作为过滤白名单）
+    allowed_models: list[str] | None = None
 
     _normalize_base_url_field = field_validator("base_url", mode="before")(_normalize_base_url)
 

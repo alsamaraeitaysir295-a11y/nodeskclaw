@@ -154,6 +154,15 @@ function togglePlatformAllowed(modelId: string) {
   }
 }
 
+// 模型清单手输：逗号/中文逗号/换行分隔 ↔ allowed_models 数组互转。
+// 中转站等 API 地址不支持 /models 自动发现时，管理员在此手动指定，AI 员工侧以此为准。
+const manualModelsText = computed({
+  get: () => form.value.allowed_models.join(', '),
+  set: (v: string) => {
+    form.value.allowed_models = v.split(/[,，\n]/).map(s => s.trim()).filter(Boolean)
+  },
+})
+
 function openConfigure(providerName: string) {
   resetForm()
   testResult.value = null
@@ -231,6 +240,8 @@ async function handleSave() {
           payload.api_type = form.value.api_type || null
           payload.label = form.value.label || null
         }
+        // 手动指定的模型清单（中转站场景），AI 员工侧以此为准
+        payload.allowed_models = form.value.allowed_models.length ? form.value.allowed_models : null
       }
       await api.patch(`/orgs/${orgId.value}/model-providers/${editingId.value}`, payload)
       toast.success(t('orgSettings.llmKeysUpdated'))
@@ -242,6 +253,7 @@ async function handleSave() {
         skip_ssl_verify: form.value.skip_ssl_verify,
         org_token_limit: form.value.org_token_limit ? Number(form.value.org_token_limit) : undefined,
         system_token_limit: form.value.system_token_limit ? Number(form.value.system_token_limit) : undefined,
+        allowed_models: form.value.allowed_models.length ? form.value.allowed_models : undefined,
       }
       if (isCustomProvider(dialogProvider.value)) {
         body.api_type = form.value.api_type || undefined
@@ -622,6 +634,19 @@ onMounted(async () => {
                 <span class="text-sm">{{ t('orgSettings.llmKeysSkipSslVerify') }}</span>
                 <span class="text-xs text-muted-foreground">{{ t('orgSettings.llmKeysSkipSslVerifyHint') }}</span>
               </label>
+            </div>
+
+            <!-- 模型清单（手动指定）：中转站等不支持自动获取模型列表的 API 地址在此填写，
+                 AI 员工侧选型以该清单为准；留空则走自动发现 -->
+            <div v-if="!lockedByPlatform" class="space-y-1.5">
+              <label class="text-sm font-medium">{{ t('orgSettings.llmKeysAllowedModels') }}</label>
+              <input
+                v-model="manualModelsText"
+                type="text"
+                :placeholder="t('orgSettings.llmKeysManualModelsPlaceholder')"
+                class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <p class="text-xs text-muted-foreground">{{ t('orgSettings.llmKeysManualModelsHint') }}</p>
             </div>
 
             <!-- 平台托管行：勾选允许 AI 员工使用的模型 -->

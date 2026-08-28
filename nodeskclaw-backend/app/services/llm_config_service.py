@@ -74,6 +74,12 @@ NODESKCLAW_TOOL_NAMES = (
     "nodeskclaw_write_file",
 )
 
+# 实例默认放开的 OpenClaw 内置工具：read 是 skills 机制的运行前提（模型按需读取
+# SKILL.md / references）。不放开的代价：技能只剩 system prompt 摘要层，模型无法
+# 读取技能文件，深度能力全部不可用（2026-08-27 确认后放开，产品决策选 A）。
+# 注意 exec/write 仍保持锁定，安全面维持最小。
+DEFAULT_BUILTIN_TOOL_ALLOW = ("read",)
+
 
 def _k8s_name(instance: Instance) -> str:
     return instance.slug or instance.name
@@ -1240,7 +1246,7 @@ def _inject_channel_config(
 
     tools_cfg = config.setdefault("tools", {})
     allow = tools_cfg.setdefault("allow", [])
-    for tool_name in NODESKCLAW_TOOL_NAMES:
+    for tool_name in (*NODESKCLAW_TOOL_NAMES, *DEFAULT_BUILTIN_TOOL_ALLOW):
         if tool_name not in allow:
             allow.append(tool_name)
 
@@ -1306,7 +1312,7 @@ async def add_workspace_channel_account(
 
         tools_cfg = existing.setdefault("tools", {})
         allow = tools_cfg.setdefault("allow", [])
-        for tool_name in NODESKCLAW_TOOL_NAMES:
+        for tool_name in (*NODESKCLAW_TOOL_NAMES, *DEFAULT_BUILTIN_TOOL_ALLOW):
             if tool_name not in allow:
                 allow.append(tool_name)
 
@@ -2037,7 +2043,7 @@ async def repair_channel_account_urls(db: AsyncSession) -> dict:
 
                 tools_cfg = config.setdefault("tools", {})
                 allow = tools_cfg.setdefault("allow", [])
-                for tool_name in NODESKCLAW_TOOL_NAMES:
+                for tool_name in (*NODESKCLAW_TOOL_NAMES, *DEFAULT_BUILTIN_TOOL_ALLOW):
                     if tool_name not in allow:
                         allow.append(tool_name)
                         changed = True
