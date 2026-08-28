@@ -55,8 +55,8 @@ const { t } = useI18n()
 const viewMode = ref<'genes' | 'templates' | 'local' | 'stats'>('genes')
 const keyword = ref('')
 const selectedCategory = ref<string | null>(null)
-// 三栏归属过滤：默认「全部」（公共市场 + 组织 + 个人）；'all' / 'personal' / 'org_private' / 'public'
-const selectedVisibility = ref<string>('all')
+// 三栏归属过滤：默认进入「公共市场」；'personal' / 'org_private' / 'public'
+const selectedVisibility = ref<string>('public')
 const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = ref(12)
@@ -306,9 +306,8 @@ const uploadCategoryOptions = computed(() =>
   categories.value.map(c => ({ value: c, label: c })),
 )
 
-// 归属过滤下拉选项：all = 公共+组织+个人 全展示（默认）；value 与后端 visibility 取值一致
+// 归属过滤下拉选项：value 与 selectedVisibility 的取值（public / org_private / personal）保持一致
 const visibilitySelectOptions = computed(() => [
-  { value: 'all', label: t('geneMarket.scopeAll') },
   { value: 'public', label: t('geneMarket.scopePublic') },
   { value: 'org_private', label: t('geneMarket.scopeOrg') },
   { value: 'personal', label: t('geneMarket.scopePersonal') },
@@ -450,15 +449,22 @@ async function onForkGene(
     }
     // 命中同名冲突且尚未处于覆盖重试中时，弹出确认框，用户确认后以 overwrite=true 重新发起请求
     // if (!overwrite) 防止确认覆盖后仍报「已存在」时无限递归重试
+    const conflictMsg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message || ''
     if (!overwrite) {
-      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message || ''
-      if (msg.includes('已存在')) {
+      if (conflictMsg.includes('已存在')) {
         const ok = confirm(t('geneMarket.forkConflictConfirm', { name: gene.name }))
         if (ok) {
           await onForkGene(gene, target, true)
-          return
         }
+        // 无论确认（重试内部自理提示）还是取消，都到此为止——
+        // 取消是用户主动行为，不能落到底下的通用错误 toast
+        return
       }
+    } else if (conflictMsg.includes('已存在')) {
+      // 覆盖重试仍报「已存在」= 同名但与源技能无血缘关系（后端按名称命中了另一条记录），
+      // 给出可操作的说明而非通用失败文案
+      toast.error(t('geneMarket.forkConflictUnrelated', { name: gene.name }))
+      return
     }
     // 统一错误解析：优先 message_key 翻译（如 fork_personal_forbidden / fork_org_forbidden）
     toast.error(resolveApiErrorMessage(e, t('geneMarket.forkFailed')))

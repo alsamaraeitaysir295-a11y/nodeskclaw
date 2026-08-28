@@ -613,21 +613,6 @@ async def _list_genes_local(
         if not user_id:
             return [], 0
         base = base.where(Gene.visibility == "personal", Gene.created_by == user_id)
-    elif visibility == "all":
-        # 全部：公共市场 + 本组织 + 个人（市场页默认视图，2026-08-27 产品口径）
-        base = base.where(
-            or_(
-                and_(
-                    Gene.visibility == "public",
-                    or_(
-                        Gene.review_status == GeneReviewStatus.approved,
-                        Gene.review_status.is_(None),
-                    ),
-                ),
-                and_(Gene.visibility == "org_private", Gene.org_id == org_id),
-                and_(Gene.visibility == "personal", Gene.created_by == user_id),
-            )
-        )
     elif visibility == "org_private":
         base = base.where(Gene.visibility == "org_private", Gene.org_id == org_id)
     elif visibility == "public":
@@ -702,9 +687,8 @@ async def list_genes(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict], int]:
-    # 个人 library 仅存在于本地 DB，不走聚合器（远程注册表没有个人数据）；
-    # all = 公共+组织+个人 的并集，同样本地直查（远程注册表只有公共数据，走 public 档位时才聚合）
-    if visibility in ("personal", "all"):
+    # 个人 library 仅存在于本地 DB，不走聚合器（远程注册表没有个人数据）
+    if visibility == "personal":
         return await _list_genes_local(
             db,
             keyword=keyword, tag=tag, category=category, source=source,
