@@ -11,16 +11,16 @@ import zipfile
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.deps import get_current_org, get_db, require_org_role
+from app.core.deps import get_current_org, get_db, require_org_role, require_super_admin_dep
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user
 from app.core import hooks
 from app.models.base import not_deleted
-from app.models.gene import Gene
+from app.models.gene import Gene, InstanceGene
 from app.models.user import User
 from app.schemas.common import ApiResponse, PaginatedResponse, Pagination
 from app.schemas.gene import (
@@ -41,7 +41,7 @@ from app.schemas.gene import (
     UpdateGenomeRequest,
     UploadTarget,
 )
-from app.services import gene_service
+from app.services import gene_category_service, gene_market_stat_service, gene_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -55,6 +55,54 @@ _MAX_UPLOAD_FILE_COUNT = 500                # 单次最多 500 个文件
 
 # 与 schemas/gene.py 里 GeneCreateRequest.slug 的正则保持一致
 _SLUG_DISALLOWED_CHARS_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def _extract_zip_to_files(data: bytes) -> dict[str, bytes]:
+    """把上传的 zip 包在内存中解包为 {相对路径: 内容}，供文件夹上传同一条链路解析。
+
+    安全与限额（与 multipart 文件夹上传一致）：
+    - 条目数 ≤ _MAX_UPLOAD_FILE_COUNT；单条目 ≤ _MAX_UPLOAD_FILE_SIZE；
+      解包后总大小 ≤ _MAX_UPLOAD_TOTAL_SIZE（防解压炸弹）
+    - 跳过目录条目；拒绝绝对路径与包含 .. 的路径穿越条目
+    - 统一剥离顶层文件夹前缀（zip 常见结构是 myskill/SKILL.md）
+    """
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise BadRequestError("ZIP 包格式损坏，无法解析", "errors.gene.zip_corrupt")
+
+    entries: list[tuple[str, bytes]] = []
+    total_size = 0
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        name = info.filename.replace("\\", "/").lstrip("./")
+        if not name or name.startswith("/") or ".." in name.split("/"):
+            raise BadRequestError(f"ZIP 包内含不安全路径：{info.filename}", "errors.gene.zip_unsafe_path")
+        content = archive.read(info)
+        if len(content) > _MAX_UPLOAD_FILE_SIZE:
+            raise BadRequestError(
+                f"文件 {name} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
+            )
+        total_size += len(content)
+        if total_size > _MAX_UPLOAD_TOTAL_SIZE:
+            raise BadRequestError(
+                f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
+            )
+        entries.append((name, content))
+
+    if not entries:
+        raise BadRequestError("ZIP 包内没有任何文件", "errors.gene.zip_empty")
+    if len(entries) > _MAX_UPLOAD_FILE_COUNT:
+        raise BadRequestError(f"文件数量超过限制（最多 {_MAX_UPLOAD_FILE_COUNT} 个）")
+
+    # 统一剥离顶层文件夹前缀（与 multipart 上传的前缀剥离逻辑一致）
+    first_parts = {n.split("/", 1)[0] for n, _ in entries if "/" in n}
+    if len(first_parts) == 1 and all("/" in n for n, _ in entries):
+        prefix = first_parts.pop() + "/"
+        entries = [(n[len(prefix):], c) for n, c in entries]
+
+    return {name: content for name, content in entries}
 
 
 def _slugify_gene_name(name: str) -> str:
@@ -137,6 +185,35 @@ async def gene_tags(
     return ApiResponse(data=[t.model_dump() for t in tags])
 
 
+@router.get("/genes/categories")
+async def gene_categories(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+):
+    """技能市场分类列表（登录可读；首次访问自动播种默认八类）。"""
+    return ApiResponse(data=await gene_category_service.list_categories(db))
+
+
+class CategoryListRequest(BaseModel):
+    categories: list[str]
+
+
+@router.put("/admin/genes/categories")
+async def replace_gene_categories(
+    req: CategoryListRequest,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_super_admin_dep),
+):
+    """超管全量替换分类列表（顺序即展示顺序）。
+
+    鉴权用 require_super_admin_dep（is_super_admin 标记）而非 require_org_role：
+    后者查 AdminMembership（管理后台身份体系），平台超管账号通常没有该记录会 403；
+    与 EE 超管路由及前端 is_super_admin 显示条件保持同一口径。
+    """
+    data = await gene_category_service.replace_categories(db, req.categories)
+    return ApiResponse(data=data)
+
+
 @router.get("/genes/featured")
 async def featured_genes(
     limit: int = Query(10, ge=1, le=50),
@@ -145,6 +222,24 @@ async def featured_genes(
 ):
     genes = await gene_service.get_featured_genes(db, limit=limit)
     return ApiResponse(data=genes)
+
+
+@router.get("/genes/market-stats")
+async def gene_market_stats(
+    dimension: str = Query("total", pattern="^(total|month|week)$"),
+    db: AsyncSession = Depends(get_db),
+    org_ctx: tuple = Depends(get_current_org),
+):
+    """技能市场统计（组织内所有成员可见）。
+
+    数据范围 = 公共市场 + 当前组织的基因；口径见 gene_market_stat_service：
+    下载榜 = zip 下载 + fork 到个人库；使用榜 = llm-proxy 埋点的实际调用。
+    """
+    _user, org = org_ctx
+    stats = await gene_market_stat_service.get_market_stats(
+        db, org_id=org.id, dimension=dimension,
+    )
+    return ApiResponse(data=stats)
 
 
 @router.post("/genes/upload-folder", response_model=ApiResponse[dict])
@@ -158,6 +253,7 @@ async def upload_gene_folder(
         description="上传目标：personal(个人 library) / org(组织 library, 需 admin 审核) / public(公共市场, 需 admin 审核)",
     ),
     version: str = Query("1.0.0", max_length=16, description="技能版本号，默认 1.0.0"),
+    category: str | None = Query(None, max_length=32, description="技能分类（市场分类下拉的值）"),
 ):
     """通过文件夹（多文件 multipart）上传本地 Gene。
 
@@ -193,36 +289,46 @@ async def upload_gene_folder(
     if len(raw_entries) > _MAX_UPLOAD_FILE_COUNT:
         raise BadRequestError(f"文件数量超过限制（最多 {_MAX_UPLOAD_FILE_COUNT} 个）")
 
-    all_first = {p.split("/", 1)[0] for p, _ in raw_entries if "/" in p}
-    has_uniform_prefix = (
-        len(all_first) == 1 and all("/" in p for p, _ in raw_entries)
-    )
-    strip_prefix = (all_first.pop() + "/") if has_uniform_prefix else ""
+    # 单个 .zip 条目：内存解包后走同一条解析/校验/入库链路（前端「上传 ZIP 包」入口）
+    if len(raw_entries) == 1 and raw_entries[0][0].lower().endswith(".zip"):
+        _zip_name, zip_upload = raw_entries[0]
+        zip_data = await zip_upload.read()
+        if len(zip_data) > _MAX_UPLOAD_TOTAL_SIZE:
+            raise BadRequestError(
+                f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
+            )
+        files_dict = _extract_zip_to_files(zip_data)
+    else:
+        all_first = {p.split("/", 1)[0] for p, _ in raw_entries if "/" in p}
+        has_uniform_prefix = (
+            len(all_first) == 1 and all("/" in p for p, _ in raw_entries)
+        )
+        strip_prefix = (all_first.pop() + "/") if has_uniform_prefix else ""
 
-    files_dict: dict[str, bytes] = {}
-    total_size = 0
-    for raw, upload_file in raw_entries:
-        rel_path = raw[len(strip_prefix):] if strip_prefix and raw.startswith(strip_prefix) else raw
-        # 分块读取：每读一块就立即检查单文件/总大小上限，一旦超限马上中止读取，
-        # 避免恶意超大文件在被拒绝前就已整体读入内存（此前是 read() 全量读完才检查，防护形同虚设）
-        chunks: list[bytes] = []
-        file_size = 0
-        while True:
-            chunk = await upload_file.read(_UPLOAD_READ_CHUNK_SIZE)
-            if not chunk:
-                break
-            file_size += len(chunk)
-            if file_size > _MAX_UPLOAD_FILE_SIZE:
-                raise BadRequestError(
-                    f"文件 {raw} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
-                )
-            if total_size + file_size > _MAX_UPLOAD_TOTAL_SIZE:
-                raise BadRequestError(
-                    f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
-                )
-            chunks.append(chunk)
-        total_size += file_size
-        files_dict[rel_path] = b"".join(chunks)
+        files_dict = {}
+        total_size = 0
+        for raw, upload_file in raw_entries:
+            rel_path = raw[len(strip_prefix):] if strip_prefix and raw.startswith(strip_prefix) else raw
+            # 分块读取：每读一块就立即检查单文件/总大小上限，一旦超限马上中止读取，
+            # 避免恶意超大文件在被拒绝前就已整体读入内存（此前是 read() 全量读完才检查，防护形同虚设）
+            chunks: list[bytes] = []
+            file_size = 0
+            while True:
+                chunk = await upload_file.read(_UPLOAD_READ_CHUNK_SIZE)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > _MAX_UPLOAD_FILE_SIZE:
+                    raise BadRequestError(
+                        f"文件 {raw} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
+                    )
+                if total_size + file_size > _MAX_UPLOAD_TOTAL_SIZE:
+                    raise BadRequestError(
+                        f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
+                    )
+                chunks.append(chunk)
+            total_size += file_size
+            files_dict[rel_path] = b"".join(chunks)
 
     meta = skill_package_service.parse_skill_folder(files_dict)
     manifest = meta.get("manifest", {})
@@ -246,6 +352,7 @@ async def upload_gene_folder(
         slug=_slugify_gene_name(meta["name"]),
         description=meta.get("description", ""),
         short_description=meta.get("description", "")[:256] if meta.get("description") else None,
+        category=category,
         source="manual",
         is_published=attrs["is_published"],
         visibility=attrs["visibility"],
@@ -358,6 +465,11 @@ async def download_gene(
     buf.seek(0, 2)
     zip_size = buf.tell()
     buf.seek(0)
+    # 统计埋点：zip 下载计一次下载量（失败不影响下载主流程）
+    await gene_market_stat_service.record_event(
+        gene=gene, event_type="zip_download", db=db,
+        user_id=current_user.id, org_id=current_user.current_org_id,
+    )
     # 对 slug 做安全处理，防止 Content-Disposition 注入，仅保留 slug 规范允许字符
     safe_slug = re.sub(r"[^a-zA-Z0-9_-]", "_", gene_slug)
     return StreamingResponse(
@@ -593,6 +705,20 @@ async def install_gene(
 ):
     _current_user, org = org_ctx
     result = await gene_service.install_gene(db, instance_id, req.gene_slug, org_id=org.id)
+    # 统计埋点：员工配置界面安装技能计一次下载量（与 fork/zip 同榜）。
+    # 同一 slug 可在多 scope 并存，必须记在"实际安装的那一行"上——从 install 返回的
+    # InstanceGene id 反查 gene_id，避免按 slug 任意取行导致计数挂到别的 scope 副本
+    ig_row = (await db.execute(
+        select(InstanceGene).where(InstanceGene.id == result["id"])
+    )).scalars().first()
+    installed_gene = (
+        await db.execute(select(Gene).where(Gene.id == ig_row.gene_id))
+    ).scalars().first() if ig_row is not None else None
+    if installed_gene is not None:
+        await gene_market_stat_service.record_event(
+            gene=installed_gene, event_type="install", db=db,
+            user_id=_current_user.id, org_id=org.id,
+        )
     await hooks.emit("operation_audit", action="gene.installed", target_type="instance_gene", target_id=result["id"], actor_id=_current_user.id, org_id=org.id, details={"instance_id": instance_id, "gene_slug": req.gene_slug})
     return ApiResponse(data=result)
 
@@ -1045,6 +1171,23 @@ async def fork_gene(
         current_user=current_user,
         overwrite=req.overwrite,
     )
+    # 统计埋点：fork 到个人库计一次下载量（记在源 gene 上，市场热度归因；
+    # gene_data 是 fork 出的副本，不能拿来记账）。外部 aggregator 源在本地
+    # 无行，查不到就静默跳过（榜单本就只覆盖本地 gene）。
+    source_gene = (
+        await db.execute(
+            select(Gene).where(
+                not_deleted(Gene),
+                or_(Gene.id == gene_identifier, Gene.slug == gene_identifier),
+            )
+        )
+    ).scalars().first()
+    if source_gene is not None:
+        await gene_market_stat_service.record_event(
+            gene=source_gene, event_type="fork", db=db,
+            user_id=current_user.id, org_id=current_user.current_org_id,
+            target_scope=req.target,
+        )
     # org_id 用操作者当前组织近似（fork 的目标 scope 由 req.target 决定，不一定等于被 fork 的源 gene 所属组织）
     await hooks.emit("operation_audit", action="gene.forked", target_type="gene", target_id=gene_data["id"], actor_id=current_user.id, org_id=current_user.current_org_id, details={"source": gene_identifier, "target": req.target})
     return ApiResponse(data=gene_data)

@@ -1,5 +1,26 @@
 import api from './api'
 
+/** 技能市场分类（管理员可编辑的字典项） */
+export interface GeneCategory {
+  id: string
+  name: string
+  sort_order: number
+}
+
+/** 技能市场统计：榜单条目（下载榜 / 使用榜共用，按 slug 聚合合并多 scope 副本） */
+export interface MarketStatsRankItem {
+  slug: string
+  name: string
+  count: number
+}
+
+/** 技能市场统计响应（GET /genes/market-stats） */
+export interface MarketStats {
+  dimension: 'total' | 'month' | 'week'
+  totals: { download: number; use: number }
+  rankings: { download: MarketStatsRankItem[]; use: MarketStatsRankItem[] }
+}
+
 export interface KnowledgeBase {
   id: string
   org_id: string
@@ -157,12 +178,14 @@ export const skillApi = {
    * 后端自动剥离顶层文件夹名并序列化为 manifest JSON。
    *
    * @param target 上传目标库（默认 personal，进入用户个人 library 立即可用）
+   * @param category 技能分类（市场分类下拉的值，上传时必选）
    */
   uploadFolder: (
-    files: FileList,
+    files: FileList | File[],
     overwrite = false,
     target: UploadTarget = 'personal',
     version?: string,
+    category?: string,
   ) => {
     const form = new FormData()
     for (const file of Array.from(files)) {
@@ -171,8 +194,9 @@ export const skillApi = {
     }
     const params = new URLSearchParams({ target })
     if (overwrite) params.set('overwrite', 'true')
-    // 版本号可选：仅当调用方显式传入非空版本号时才附加到查询参数，避免空字符串产生 version= 空值
+    // 版本号/分类可选：仅当调用方显式传入非空值时才附加到查询参数，避免空字符串产生空值
     if (version) params.set('version', version)
+    if (category) params.set('category', category)
     const url = `/genes/upload-folder?${params.toString()}`
     return api.post<{ data: Skill }>(url, form).then((r) => r.data.data)
   },
@@ -184,4 +208,25 @@ export const skillApi = {
    */
   deleteGene: (geneId: string): Promise<{ deleted: boolean; id: string }> =>
     api.delete<{ data: { deleted: boolean; id: string } }>(`/genes/${geneId}`).then((r) => r.data.data),
+
+  /**
+   * 技能市场统计（两榜）：下载榜 = zip 下载 + fork 到个人库；使用榜 = 实际调用。
+   * @param dimension 时间维度：total（总计）/ month（本月）/ week（本周）
+   */
+  getMarketStats: (
+    dimension: 'total' | 'month' | 'week' = 'total',
+  ): Promise<MarketStats> =>
+    api
+      .get<{ data: MarketStats }>('/genes/market-stats', { params: { dimension } })
+      .then((r) => r.data.data),
+
+  /** 分类列表（登录可读，首次自动播种默认八类） */
+  getCategories: (): Promise<GeneCategory[]> =>
+    api.get<{ data: GeneCategory[] }>('/genes/categories').then((r) => r.data.data),
+
+  /** 管理员全量替换分类列表（顺序即展示顺序） */
+  updateCategories: (categories: string[]): Promise<GeneCategory[]> =>
+    api
+      .put<{ data: GeneCategory[] }>('/admin/genes/categories', { categories })
+      .then((r) => r.data.data),
 }

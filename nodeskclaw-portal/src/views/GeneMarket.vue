@@ -26,12 +26,11 @@ import {
   Activity,
   Check,
   X,
-  Globe,
-  HardDrive,
   Upload,
   FolderOpen,
   AlertTriangle,
   Code2,
+  Settings,
   Trash2,
   FolderDown,
   type Component,
@@ -43,7 +42,9 @@ import { useAuthStore } from '@/stores/auth'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
 import { skillApi } from '@/services/skills'
+import type { MarketStats, MarketStatsRankItem } from '@/services/skills'
 import { suggestNextPatch } from '@/utils/semver'
+import { iconColorClass } from '@/utils/skillIconColor'
 
 const router = useRouter()
 const store = useGeneStore()
@@ -51,11 +52,11 @@ const authStore = useAuthStore()  // 用于获取当前登录用户，判断删�
 const toast = useToast()
 const { t } = useI18n()
 
-const viewMode = ref<'genes' | 'templates' | 'local'>('genes')
+const viewMode = ref<'genes' | 'templates' | 'local' | 'stats'>('genes')
 const keyword = ref('')
 const selectedCategory = ref<string | null>(null)
-// 三栏归属过滤：默认进入「公共市场」；'personal' / 'org_private' / 'public'
-const selectedVisibility = ref<string>('public')
+// 三栏归属过滤：默认「全部」（公共市场 + 组织 + 个人）；'all' / 'personal' / 'org_private' / 'public'
+const selectedVisibility = ref<string>('all')
 const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = ref(12)
@@ -94,30 +95,24 @@ function validateUploadFiles(files: FileList): string | null {
   return null
 }
 
-async function handleLocalFile(file: File) {
-  localError.value = '请使用文件夹上传功能'
-  return
-}
-
-async function handleLocalFolder() {
-  const input = localFolderInputRef.value
-  if (!input?.files || input.files.length === 0) {
-    localError.value = '请先选择文件夹'
-    return
-  }
-  // 上传前本地校验大小/数量，避免把超大请求发到后端才被拒绝
-  const validationError = validateUploadFiles(input.files)
-  if (validationError) {
-    localError.value = validationError
+/** 上传核心：分类校验 + 提交 + 409 同名冲突的确认/版本号重试流程。
+ * 文件夹上传与 ZIP 包上传共用（displayName 用于冲突确认弹窗里的名字展示） */
+async function doUpload(fileList: FileList | File[], displayName: string) {
+  // 分类必选：市场分类筛选/展示依赖该字段
+  if (!uploadCategory.value) {
+    localError.value = t('geneMarket.categoryRequired')
     return
   }
   localUploading.value = true
   localError.value = null
   localSuccess.value = null
+  const input = fileList as FileList
   try {
     // 直接上传只能进入个人 library（后端已无条件拒绝 org/public target），无需再按目标分流文案
-    await skillApi.uploadFolder(input.files, false, 'personal')
+    const created = await skillApi.uploadFolder(input, false, 'personal', undefined, uploadCategory.value)
     localSuccess.value = '已上传到个人技能 library'
+    // 带技能名的成功提示（后端返回的基因名为准，取不到回退目录/包名）
+    toast.success(t('geneMarket.uploadedToPersonal', { name: created?.name || displayName }))
     showLocalUpload.value = false
     selectedLocalFiles.value = []
     await loadData()
@@ -126,11 +121,10 @@ async function handleLocalFolder() {
     if (e?.response?.status === 409) {
       const msg = e?.response?.data?.message || ''
       if (msg.includes('已存在') || msg.includes('already exists')) {
-        const folderName = input.files[0]?.webkitRelativePath?.split('/')[0] || '该文件夹'
         // 已知局限：后端 409 响应暂未携带冲突基因的当前版本号，此处 fallback 到 1.0.0（详见任务计划文档）
         const existingVersion: string = e?.response?.data?.data?.version || '1.0.0'
         const suggested = suggestNextPatch(existingVersion)
-        const ok = confirm(`${folderName} 基因已存在（当前版本 ${existingVersion}），是否覆盖原基因？`)
+        const ok = confirm(`${displayName} 基因已存在（当前版本 ${existingVersion}），是否覆盖原基因？`)
         if (ok) {
           const inputVersion = prompt('请输入本次覆盖的版本号（不改内容可保持原版本号不变）', suggested)
           if (inputVersion === null) {
@@ -143,8 +137,9 @@ async function handleLocalFolder() {
           const finalVersion = inputVersion.trim() || suggested
           // 重新上传，携带覆盖参数与版本号
           try {
-            await skillApi.uploadFolder(input.files, true, 'personal', finalVersion)
+            const overwritten = await skillApi.uploadFolder(input, true, 'personal', finalVersion, uploadCategory.value ?? undefined)
             localSuccess.value = `基因已覆盖`
+            toast.success(t('geneMarket.uploadedToPersonal', { name: overwritten?.name || displayName }))
             showLocalUpload.value = false
             selectedLocalFiles.value = []
             await loadData()
@@ -165,6 +160,31 @@ async function handleLocalFolder() {
   }
 }
 
+/** ZIP 包上传：选中 .zip 后直接走同一上传链路（后端检测单 zip 条目自动解包） */
+async function handleLocalFile(file: File) {
+  if (file.size > MAX_UPLOAD_TOTAL_SIZE) {
+    localError.value = `ZIP 包超过大小限制（${MAX_UPLOAD_TOTAL_SIZE / (1024 * 1024)}MB）`
+    return
+  }
+  await doUpload([file], file.name.replace(/\.zip$/i, ''))
+}
+
+async function handleLocalFolder() {
+  const input = localFolderInputRef.value
+  if (!input?.files || input.files.length === 0) {
+    localError.value = '请先选择文件夹'
+    return
+  }
+  // 上传前本地校验大小/数量，避免把超大请求发到后端才被拒绝
+  const validationError = validateUploadFiles(input.files)
+  if (validationError) {
+    localError.value = validationError
+    return
+  }
+  const folderName = input.files[0]?.webkitRelativePath?.split('/')[0] || '该文件夹'
+  await doUpload(input.files, folderName)
+}
+
 function onLocalFolderInput(e: Event) {
   const input = e.target as HTMLInputElement
   if (!input.files || input.files.length === 0) return
@@ -173,44 +193,101 @@ function onLocalFolderInput(e: Event) {
   )
 }
 
-const categories = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
+// 分类列表：改读后端（管理员可编辑），加载失败回退默认八类
+const DEFAULT_CATEGORIES = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
+const categories = ref<string[]>([...DEFAULT_CATEGORIES])
 
-// 视图 Tab 选项：技能 / AI员工 / 本地上传（value 类型与 viewMode 联合类型保持一致）
-const viewModeTabs: { value: 'genes' | 'templates' | 'local'; key: string }[] = [
+async function loadCategories() {
+  try {
+    const list = await skillApi.getCategories()
+    if (list.length) categories.value = list.map(c => c.name)
+  } catch {
+    // 分类加载失败不阻塞页面，沿用默认列表
+  }
+}
+
+// ── 分类管理（管理员） ──────────────────────────────
+const isAdmin = computed(() => !!authStore.user?.is_super_admin)
+const showCategoryDialog = ref(false)
+const categoryDraft = ref<string[]>([])
+const newCategoryInput = ref('')
+const savingCategories = ref(false)
+
+function openCategoryDialog() {
+  categoryDraft.value = [...categories.value]
+  newCategoryInput.value = ''
+  showCategoryDialog.value = true
+}
+
+function addDraftCategory() {
+  const name = newCategoryInput.value.trim()
+  if (name && !categoryDraft.value.includes(name) && name.length <= 32) {
+    categoryDraft.value.push(name)
+  }
+  newCategoryInput.value = ''
+}
+
+async function saveCategories() {
+  savingCategories.value = true
+  try {
+    const list = await skillApi.updateCategories(categoryDraft.value)
+    categories.value = list.map(c => c.name)
+    showCategoryDialog.value = false
+    toast.success(t('geneMarket.categoriesSaved'))
+  } catch (e) {
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.categoriesSaveFailed')))
+  } finally {
+    savingCategories.value = false
+  }
+}
+
+// ── 本地上传分类（必选） ──────────────────────────────
+const uploadCategory = ref<string | null>(null)
+
+// 视图 Tab 选项：技能 / AI员工 / 统计（本地上传不在左侧 tab 组，改为工具栏右侧操作按钮）
+const viewModeTabs: { value: 'genes' | 'templates' | 'stats'; key: string }[] = [
   { value: 'genes', key: 'geneMarket.tabGenes' },
   { value: 'templates', key: 'geneMarket.tabTemplates' },
-  { value: 'local', key: 'geneMarket.tabLocal' },
+  { value: 'stats', key: 'geneMarket.tabStats' },
 ]
 
-const sortOptions = ['popularity', 'rating', 'effectiveness', 'newest']
+// ── 统计视图状态 ──────────────────────────────
+const statsDimension = ref<'total' | 'month' | 'week'>('total')
+const statsLoading = ref(false)
+const marketStats = ref<MarketStats | null>(null)
 
-const geneMetaKeyMap: Record<string, string> = {
-  开发: 'geneMeta.development',
-  数据: 'geneMeta.data',
-  运维: 'geneMeta.ops',
-  网络: 'geneMeta.network',
-  创意: 'geneMeta.creativity',
-  沟通: 'geneMeta.communication',
-  安全: 'geneMeta.security',
-  效率: 'geneMeta.efficiency',
-  性格: 'geneMeta.personality',
-  能力: 'geneMeta.ability',
-  知识: 'geneMeta.knowledge',
+const statsDimensionTabs: { value: 'total' | 'month' | 'week'; key: string }[] = [
+  { value: 'total', key: 'geneMarket.statsDimTotal' },
+  { value: 'month', key: 'geneMarket.statsDimMonth' },
+  { value: 'week', key: 'geneMarket.statsDimWeek' },
+]
+
+async function loadStats() {
+  statsLoading.value = true
+  try {
+    marketStats.value = await skillApi.getMarketStats(statsDimension.value)
+  } catch (e) {
+    // 统计页加载失败仅 toast 提示，保留上一次数据
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.statsLoadFailed')))
+  } finally {
+    statsLoading.value = false
+  }
 }
 
-function localizeGeneMeta(value?: string) {
-  if (!value) return ''
-  const key = geneMetaKeyMap[value]
-  if (!key) return value
-  const translated = t(key)
-  return translated === key ? value : translated
+// 榜单条目的占比条宽度（相对榜首），避免每行都 100%
+function statsBarWidth(item: MarketStatsRankItem, ranking: MarketStatsRankItem[]): string {
+  const max = ranking[0]?.count || 0
+  if (max <= 0) return '0%'
+  return `${Math.max(4, Math.round((item.count / max) * 100))}%`
 }
+
+// 排序口径（与后端 sort_map 对齐）：热门=下载量(install_count)、评分=avg_rating、最新=上传时间
+const sortOptions = ['popularity', 'rating', 'newest']
 
 function getSortLabel(value: string) {
   const map: Record<string, string> = {
     popularity: 'geneMarket.sortPopularity',
     rating: 'geneMarket.sortRating',
-    effectiveness: 'geneMarket.sortEffectiveness',
     newest: 'geneMarket.sortNewest',
   }
   const key = map[value]
@@ -221,11 +298,17 @@ function getSortLabel(value: string) {
 
 const categorySelectOptions = computed(() => [
   { value: null, label: t('geneMarket.allCategories') },
-  ...categories.map(c => ({ value: c, label: localizeGeneMeta(c) })),
+  // 分类为管理员可编辑的自由文本，直接展示原文（不走 geneMeta 本地化映射）
+  ...categories.value.map(c => ({ value: c, label: c })),
 ])
 
-// 归属过滤下拉选项：value 与 selectedVisibility 的取值（public / org_private / personal）保持一致
+const uploadCategoryOptions = computed(() =>
+  categories.value.map(c => ({ value: c, label: c })),
+)
+
+// 归属过滤下拉选项：all = 公共+组织+个人 全展示（默认）；value 与后端 visibility 取值一致
 const visibilitySelectOptions = computed(() => [
+  { value: 'all', label: t('geneMarket.scopeAll') },
   { value: 'public', label: t('geneMarket.scopePublic') },
   { value: 'org_private', label: t('geneMarket.scopeOrg') },
   { value: 'personal', label: t('geneMarket.scopePersonal') },
@@ -487,6 +570,11 @@ async function onForkTemplate(tpl: TemplateInfo, target: 'personal' | 'org' | 'p
 }
 
 async function loadData() {
+  if (viewMode.value === 'stats') {
+    // 统计视图：本地 loading，不占用 store.loading（避免与列表视图互相干扰）
+    await loadStats()
+    return
+  }
   if (viewMode.value === 'genes') {
     await store.fetchGenes({
       keyword: keyword.value || undefined,
@@ -517,6 +605,8 @@ function goToTemplate(id: string) {
 }
 
 async function onMount() {
+  // 分类加载不阻塞首屏（失败回退默认列表）
+  loadCategories()
   await store.fetchGeneTags()
   await loadFeatured()
   await loadData()
@@ -529,6 +619,11 @@ watch([keyword, selectedVisibility, selectedCategory, sortBy, viewMode], () => {
   loadData()
 })
 
+// 统计维度切换：仅在统计视图下重新拉取
+watch(statsDimension, () => {
+  if (viewMode.value === 'stats') loadStats()
+})
+
 watch(page, loadData)
 
 function goToGene(slug: string) {
@@ -537,15 +632,6 @@ function goToGene(slug: string) {
 
 function goToGenome(id: string) {
   router.push(`/gene-market/genome/${id}`)
-}
-
-function hasNativeTools(gene: GeneItem): boolean {
-  const toolAllow = gene.manifest?.tool_allow
-  if (Array.isArray(toolAllow) && toolAllow.length > 0) return true
-  const mcpServers = gene.manifest?.mcp_servers
-  if (Array.isArray(mcpServers) && mcpServers.length > 0) return true
-  const tags = gene.tags ?? []
-  return tags.some((t) => ['mcp', 'tools'].includes(String(t).toLowerCase()))
 }
 </script>
 
@@ -559,7 +645,7 @@ function hasNativeTools(gene: GeneItem): boolean {
       <!-- 顶部工具栏：视图 Tab + 归属过滤 + 搜索筛选合并为一行，减少纵向占用；
            窄屏时 flex-wrap 自动换行 -->
       <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-6">
-        <!-- 视图 Tab：技能 / AI员工 / 本地上传 -->
+        <!-- 视图 Tab：技能 / AI员工 / 统计 -->
         <div class="flex gap-1">
           <button
             v-for="mode in viewModeTabs"
@@ -576,8 +662,8 @@ function hasNativeTools(gene: GeneItem): boolean {
           </button>
         </div>
 
-        <!-- 搜索 + 归属 + 分类 + 排序：靠右排布（本地上传视图无列表可筛，不展示） -->
-        <div v-if="viewMode !== 'local'" class="flex flex-1 flex-wrap items-center justify-end gap-2 min-w-[280px]">
+        <!-- 搜索 + 归属 + 分类 + 排序：靠右排布（本地上传/统计视图无列表可筛，不展示） -->
+        <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex flex-1 flex-wrap items-center justify-end gap-2 min-w-[280px]">
           <div class="relative w-52 max-w-full">
             <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
@@ -598,147 +684,130 @@ function hasNativeTools(gene: GeneItem): boolean {
 
           <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
         </div>
+
+        <!-- 本地上传：右侧操作按钮（筛选区隐藏时 ml-auto 兜底靠右） -->
+        <button
+          :class="[
+            'ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors',
+            viewMode === 'local'
+              ? 'bg-primary/10 text-primary border-primary/30'
+              : 'border-border text-muted-foreground hover:border-primary/50 hover:text-primary',
+          ]"
+          @click="viewMode = 'local'"
+        >
+          <Upload class="w-4 h-4" />
+          {{ t('geneMarket.tabLocal') }}
+        </button>
       </div>
 
-        <div v-if="store.loading" class="flex justify-center py-20">
+        <div v-if="store.loading && viewMode !== 'stats'" class="flex justify-center py-20">
           <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
         </div>
 
         <template v-else>
           <section>
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <!-- 行式列表：多彩 squircle 图标 + 标题行内联标签 + 两行描述 + 右侧数据列，
+                 条目间分隔线（参考市场设计稿），字段与旧卡片完全一致 -->
+            <div class="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
               <template v-if="viewMode === 'genes'">
               <div
                 v-for="gene in store.genes"
                 :key="gene.id"
-                class="relative p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
+                class="flex items-center gap-4 px-5 py-2 hover:bg-muted/30 transition cursor-pointer group"
                 @click="goToGene(gene.slug)"
               >
-                <!-- 删除按钮：仅本地上传 gene 且当前用户有权限时显示，右移为下载按钮腾出位置 -->
-                <button
-                  v-if="canDeleteGene(gene)"
-                  class="absolute top-2 right-9 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition z-10"
-                  :title="t('geneMarket.deleteGene')"
-                  @click.stop="onDeleteGene(gene)"
+                <!-- 图标：按 slug 稳定散列底色 -->
+                <div
+                  :class="['w-14 h-14 rounded-2xl flex items-center justify-center shrink-0', iconColorClass(gene.slug)]"
                 >
-                  <Trash2 class="w-4 h-4" />
-                </button>
-                <!-- 下载按钮：始终显示，点击下载技能到本地文件系统 -->
-                <button
-                  class="absolute top-2 right-2 p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition z-10"
-                  :title="t('geneMarket.downloadGene')"
-                  :disabled="downloadingSlug === gene.slug"
-                  @click.stop="onDownloadGene(gene)"
-                >
-                  <Loader2 v-if="downloadingSlug === gene.slug" class="w-4 h-4 animate-spin" />
-                  <FolderDown v-else class="w-4 h-4" />
-                </button>
-                <div class="flex items-start gap-3 mb-2">
-                  <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    <component :is="resolveIcon(gene.icon)" class="w-5 h-5 text-primary" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2 flex-wrap">
-                      <span class="font-medium truncate">{{ gene.name }}</span>
-                      <span class="shrink-0 text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                        v{{ gene.version }}
-                      </span>
-                      <span
-                        v-if="gene.source_registry && gene.source_registry !== 'local'"
-                        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
-                      >
-                        <Globe class="w-3 h-3" />
-                        {{ gene.source_registry_name || gene.source_registry }}
-                      </span>
-                      <span
-                        v-else-if="gene.source_registry === 'local'"
-                        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
-                      >
-                        <HardDrive class="w-3 h-3" />
-                        {{ t('gene.registryLocal') }}
-                      </span>
-                      <span
-                        v-if="hasNativeTools(gene)"
-                        class="shrink-0 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
-                      >
-                        {{ t('geneMarket.hasNativeTools') }}
-                      </span>
-                    </div>
-                    <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
-                      {{ gene.short_description ?? gene.description ?? '' }}
-                    </p>
-                    <!-- 跨 scope 版本感知角标：仅个人库条目在 org_private/public 存在更新版本时展示 -->
-                    <div v-if="gene.newer_sibling_versions?.length" class="flex flex-wrap gap-1 mt-1">
-                      <span
-                        v-for="(sibling, idx) in gene.newer_sibling_versions"
-                        :key="idx"
-                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-500"
-                      >
-                        {{ t('geneMarket.newerVersionBadge', { name: sibling.org_name || t('geneMarket.visPublic'), version: sibling.version }) }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div class="flex flex-wrap gap-1 mt-2">
-                  <span
-                    v-for="tag in gene.tags.slice(0, 3)"
-                    :key="tag"
-                    class="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary"
-                  >
-                    {{ localizeGeneMeta(tag) }}
-                  </span>
-                </div>
-                <div class="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
-                  <span class="flex items-center gap-0.5">
-                    <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                    {{ (gene.avg_rating ?? 0).toFixed(1) }}
-                  </span>
-                  <div class="flex-1 min-w-0">
-                    <div class="h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div
-                        class="h-full rounded-full bg-primary/60"
-                        :style="{ width: `${Math.min(100, (gene.effectiveness_score ?? 0) * 100)}%` }"
-                      />
-                    </div>
-                  </div>
-                  <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
+                  <component :is="resolveIcon(gene.icon)" class="w-7 h-7 text-white" />
                 </div>
 
-                <!-- fork 按钮组：根据源 scope + 当前用户权限决定显示哪些目标按钮 -->
-                <div
-                  v-if="canForkFrom(gene).personal || canForkFrom(gene).org || canForkFrom(gene).public"
-                  class="flex items-center gap-2 mt-3 pt-3 border-t border-border"
-                >
-                  <button
-                    v-if="canForkFrom(gene).personal"
-                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingSlug === forkKey(gene.slug, 'personal')"
-                    @click.stop="onForkGene(gene, 'personal')"
+                <!-- 中部：标题行（名称 + 分类胶囊，其余徽标/标签暂不展示）/ 描述 -->
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-semibold truncate">{{ gene.name }}</span>
+                    <span
+                      v-if="gene.category"
+                      class="shrink-0 text-xs px-2 py-0.5 rounded bg-muted/70 text-muted-foreground"
+                    >
+                      {{ gene.category }}
+                    </span>
+                  </div>
+                  <p class="text-sm text-muted-foreground line-clamp-1 mt-1">
+                    {{ gene.short_description ?? gene.description ?? '' }}
+                  </p>
+                </div>
+
+                <!-- 右侧数据列：操作按钮 / 评分与下载 / 效能条 / fork 按钮 -->
+                <div class="flex flex-col items-end gap-2 shrink-0" @click.stop>
+                  <div class="flex items-center gap-1">
+                    <!-- zip 下载到本地 -->
+                    <button
+                      class="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition"
+                      :title="t('geneMarket.downloadGene')"
+                      :disabled="downloadingSlug === gene.slug"
+                      @click.stop="onDownloadGene(gene)"
+                    >
+                      <Loader2 v-if="downloadingSlug === gene.slug" class="w-4 h-4 animate-spin" />
+                      <FolderDown v-else class="w-4 h-4" />
+                    </button>
+                    <!-- 删除：仅本地上传 gene 且当前用户有权限时显示 -->
+                    <button
+                      v-if="canDeleteGene(gene)"
+                      class="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition"
+                      :title="t('geneMarket.deleteGene')"
+                      @click.stop="onDeleteGene(gene)"
+                    >
+                      <Trash2 class="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div class="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+                    <span class="flex items-center gap-1">
+                      <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                      {{ (gene.avg_rating ?? 0).toFixed(1) }}
+                    </span>
+                    <span class="flex items-center gap-1">
+                      <Download class="w-3.5 h-3.5" />
+                      {{ gene.install_count ?? 0 }}
+                    </span>
+                  </div>
+                  <!-- fork 按钮组：根据源 scope + 当前用户权限决定显示哪些目标按钮 -->
+                  <div
+                    v-if="canForkFrom(gene).personal || canForkFrom(gene).org || canForkFrom(gene).public"
+                    class="flex items-center gap-1.5"
                   >
-                    <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'personal')" class="w-3 h-3 animate-spin" />
-                    <Download v-else class="w-3 h-3" />
-                    {{ t('geneMarket.forkToPersonal') }}
-                  </button>
-                  <button
-                    v-if="canForkFrom(gene).org"
-                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingSlug === forkKey(gene.slug, 'org')"
-                    @click.stop="onForkGene(gene, 'org')"
-                  >
-                    <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'org')" class="w-3 h-3 animate-spin" />
-                    <Download v-else class="w-3 h-3" />
-                    {{ t('geneMarket.forkToOrg') }}
-                  </button>
-                  <button
-                    v-if="canForkFrom(gene).public"
-                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingSlug === forkKey(gene.slug, 'public')"
-                    @click.stop="onForkGene(gene, 'public')"
-                  >
-                    <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'public')" class="w-3 h-3 animate-spin" />
-                    <Download v-else class="w-3 h-3" />
-                    {{ t('geneMarket.forkToPublic') }}
-                  </button>
+                    <button
+                      v-if="canForkFrom(gene).personal"
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                      :disabled="forkingSlug === forkKey(gene.slug, 'personal')"
+                      @click.stop="onForkGene(gene, 'personal')"
+                    >
+                      <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'personal')" class="w-3 h-3 animate-spin" />
+                      <Download v-else class="w-3 h-3" />
+                      {{ t('geneMarket.forkToPersonal') }}
+                    </button>
+                    <button
+                      v-if="canForkFrom(gene).org"
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                      :disabled="forkingSlug === forkKey(gene.slug, 'org')"
+                      @click.stop="onForkGene(gene, 'org')"
+                    >
+                      <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'org')" class="w-3 h-3 animate-spin" />
+                      <Download v-else class="w-3 h-3" />
+                      {{ t('geneMarket.forkToOrg') }}
+                    </button>
+                    <button
+                      v-if="canForkFrom(gene).public"
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                      :disabled="forkingSlug === forkKey(gene.slug, 'public')"
+                      @click.stop="onForkGene(gene, 'public')"
+                    >
+                      <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'public')" class="w-3 h-3 animate-spin" />
+                      <Download v-else class="w-3 h-3" />
+                      {{ t('geneMarket.forkToPublic') }}
+                    </button>
+                  </div>
                 </div>
               </div>
               </template>
@@ -746,71 +815,168 @@ function hasNativeTools(gene: GeneItem): boolean {
               <div
                 v-for="tpl in store.templates"
                 :key="tpl.id"
-                class="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
+                class="flex items-center gap-4 px-5 py-2 hover:bg-muted/30 transition cursor-pointer"
                 @click="goToTemplate(tpl.id)"
               >
-                <div class="flex items-start gap-3 mb-2">
-                  <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    <component :is="resolveIcon(tpl.icon)" class="w-5 h-5 text-primary" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <span class="font-medium truncate block">{{ tpl.name }}</span>
-                    <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
-                      {{ tpl.short_description ?? tpl.description ?? '' }}
-                    </p>
-                  </div>
-                </div>
-                <div class="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
-                  <span class="flex items-center gap-1">
-                    <Dna class="w-3.5 h-3.5" />
-                    {{ t('template.geneCount', { count: tpl.gene_slugs?.length ?? 0 }) }}
-                  </span>
-                  <span class="flex items-center gap-1">
-                    <Download class="w-3.5 h-3.5" />
-                    {{ t('template.useCount', { count: tpl.use_count ?? 0 }) }}
-                  </span>
+                <!-- 图标：按 id 稳定散列底色 -->
+                <div
+                  :class="['w-14 h-14 rounded-2xl flex items-center justify-center shrink-0', iconColorClass(tpl.id)]"
+                >
+                  <component :is="resolveIcon(tpl.icon)" class="w-7 h-7 text-white" />
                 </div>
 
-                <!-- fork 按钮组：根据源 scope + 当前用户权限决定显示哪些目标按钮 -->
-                <div
-                  v-if="canForkFromTemplate(tpl).personal || canForkFromTemplate(tpl).org || canForkFromTemplate(tpl).public"
-                  class="flex items-center gap-2 mt-3 pt-3 border-t border-border"
-                >
-                  <button
-                    v-if="canForkFromTemplate(tpl).personal"
-                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingTemplateId === forkKey(tpl.id, 'personal')"
-                    @click.stop="onForkTemplate(tpl, 'personal')"
+                <div class="min-w-0 flex-1">
+                  <span class="font-semibold truncate">{{ tpl.name }}</span>
+                  <p class="text-sm text-muted-foreground line-clamp-1 mt-1">
+                    {{ tpl.short_description ?? tpl.description ?? '' }}
+                  </p>
+                </div>
+
+                <!-- 右侧数据列：技能数 / 使用数 / fork 按钮 -->
+                <div class="flex flex-col items-end gap-2 shrink-0" @click.stop>
+                  <div class="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+                    <span class="flex items-center gap-1">
+                      <Dna class="w-3.5 h-3.5" />
+                      {{ t('template.geneCount', { count: tpl.gene_slugs?.length ?? 0 }) }}
+                    </span>
+                    <span class="flex items-center gap-1">
+                      <Download class="w-3.5 h-3.5" />
+                      {{ t('template.useCount', { count: tpl.use_count ?? 0 }) }}
+                    </span>
+                  </div>
+
+                  <!-- fork 按钮组：根据源 scope + 当前用户权限决定显示哪些目标按钮 -->
+                  <div
+                    v-if="canForkFromTemplate(tpl).personal || canForkFromTemplate(tpl).org || canForkFromTemplate(tpl).public"
+                    class="flex items-center gap-1.5"
                   >
-                    <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'personal')" class="w-3 h-3 animate-spin" />
-                    <Download v-else class="w-3 h-3" />
-                    {{ t('template.forkToPersonal') }}
-                  </button>
-                  <button
-                    v-if="canForkFromTemplate(tpl).org"
-                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingTemplateId === forkKey(tpl.id, 'org')"
-                    @click.stop="onForkTemplate(tpl, 'org')"
-                  >
-                    <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'org')" class="w-3 h-3 animate-spin" />
-                    <Download v-else class="w-3 h-3" />
-                    {{ t('template.forkToOrg') }}
-                  </button>
-                  <button
-                    v-if="canForkFromTemplate(tpl).public"
-                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingTemplateId === forkKey(tpl.id, 'public')"
-                    @click.stop="onForkTemplate(tpl, 'public')"
-                  >
-                    <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'public')" class="w-3 h-3 animate-spin" />
-                    <Download v-else class="w-3 h-3" />
-                    {{ t('template.forkToPublic') }}
-                  </button>
+                    <button
+                      v-if="canForkFromTemplate(tpl).personal"
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                      :disabled="forkingTemplateId === forkKey(tpl.id, 'personal')"
+                      @click.stop="onForkTemplate(tpl, 'personal')"
+                    >
+                      <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'personal')" class="w-3 h-3 animate-spin" />
+                      <Download v-else class="w-3 h-3" />
+                      {{ t('template.forkToPersonal') }}
+                    </button>
+                    <button
+                      v-if="canForkFromTemplate(tpl).org"
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                      :disabled="forkingTemplateId === forkKey(tpl.id, 'org')"
+                      @click.stop="onForkTemplate(tpl, 'org')"
+                    >
+                      <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'org')" class="w-3 h-3 animate-spin" />
+                      <Download v-else class="w-3 h-3" />
+                      {{ t('template.forkToOrg') }}
+                    </button>
+                    <button
+                      v-if="canForkFromTemplate(tpl).public"
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                      :disabled="forkingTemplateId === forkKey(tpl.id, 'public')"
+                      @click.stop="onForkTemplate(tpl, 'public')"
+                    >
+                      <Loader2 v-if="forkingTemplateId === forkKey(tpl.id, 'public')" class="w-3 h-3 animate-spin" />
+                      <Download v-else class="w-3 h-3" />
+                      {{ t('template.forkToPublic') }}
+                    </button>
+                  </div>
                 </div>
               </div>
               </template>
             </div>
           </section>
+
+          <!-- ═══ 统计 Tab ═══ -->
+          <div v-if="viewMode === 'stats'" class="space-y-6">
+            <!-- 汇总卡（左）+ 维度切换（右）：同一行 -->
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="flex gap-3">
+                <div class="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-card">
+                  <Download class="w-4 h-4 text-primary" />
+                  <div>
+                    <p class="text-xs text-muted-foreground">{{ t('geneMarket.statsCardDownload') }}</p>
+                    <p class="text-lg font-semibold tabular-nums">{{ marketStats?.totals.download ?? 0 }}</p>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-card">
+                  <TrendingUp class="w-4 h-4 text-primary" />
+                  <div>
+                    <p class="text-xs text-muted-foreground">{{ t('geneMarket.statsCardUse') }}</p>
+                    <p class="text-lg font-semibold tabular-nums">{{ marketStats?.totals.use ?? 0 }}</p>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5">
+                <button
+                  v-for="dim in statsDimensionTabs"
+                  :key="dim.value"
+                  :class="[
+                    'px-3 py-1.5 rounded-md text-sm transition-colors',
+                    statsDimension === dim.value
+                      ? 'bg-background text-foreground shadow-sm font-medium'
+                      : 'text-muted-foreground hover:text-foreground',
+                  ]"
+                  @click="statsDimension = dim.value"
+                >
+                  {{ t(dim.key) }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="statsLoading" class="flex justify-center py-16">
+              <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
+            </div>
+
+            <template v-else>
+              <!-- 两榜并排 -->
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div
+                  v-for="rank in [
+                    { key: 'download', title: t('geneMarket.statsRankDownload'), items: marketStats?.rankings.download },
+                    { key: 'use', title: t('geneMarket.statsRankUse'), items: marketStats?.rankings.use },
+                  ]"
+                  :key="rank.key"
+                  class="rounded-xl border border-border bg-card p-4"
+                >
+                  <h3 class="flex items-center gap-2 text-sm font-semibold mb-3">
+                    <component :is="rank.key === 'download' ? Download : TrendingUp" class="w-4 h-4 text-primary" />
+                    {{ rank.title }}
+                  </h3>
+                  <p v-if="!rank.items?.length" class="text-xs text-muted-foreground py-6 text-center">
+                    {{ t('geneMarket.statsNoData') }}
+                  </p>
+                  <div v-else class="space-y-2.5">
+                    <div
+                      v-for="(item, idx) in rank.items"
+                      :key="item.slug"
+                      class="flex items-center gap-3 cursor-pointer group"
+                      @click="goToGene(item.slug)"
+                    >
+                      <span
+                        :class="[
+                          'w-5 h-5 shrink-0 rounded text-xs flex items-center justify-center font-medium',
+                          idx < 3 ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground',
+                        ]"
+                      >
+                        {{ idx + 1 }}
+                      </span>
+                      <div class="min-w-0 flex-1">
+                        <p class="text-sm truncate group-hover:text-primary transition-colors">{{ item.name }}</p>
+                        <div class="h-1.5 rounded-full bg-muted overflow-hidden mt-1">
+                          <div
+                            class="h-full rounded-full bg-primary/60 transition-all"
+                            :style="{ width: statsBarWidth(item, rank.items!) }"
+                          />
+                        </div>
+                      </div>
+                      <span class="shrink-0 text-sm text-muted-foreground tabular-nums">{{ item.count }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
 
           <!-- ═══ 本地上传 Tab ═══ -->
           <div v-if="viewMode === 'local'" class="space-y-6">
@@ -826,6 +992,24 @@ function hasNativeTools(gene: GeneItem): boolean {
                   限制：单文件最大 {{ MAX_UPLOAD_FILE_SIZE / (1024 * 1024) }}MB，
                   总大小最大 {{ MAX_UPLOAD_TOTAL_SIZE / (1024 * 1024) }}MB，
                   最多 {{ MAX_UPLOAD_FILE_COUNT }} 个文件。
+                </p>
+
+                <!-- 分类选择（必选）：上传后技能市场的分类筛选/展示依赖该字段 -->
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-600 shrink-0">{{ t('geneMarket.categoryLabel') }}</span>
+                  <CustomSelect v-model="uploadCategory" :options="uploadCategoryOptions" />
+                  <button
+                    v-if="isAdmin"
+                    class="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 shrink-0"
+                    :title="t('geneMarket.manageCategories')"
+                    @click="openCategoryDialog"
+                  >
+                    <Settings class="w-3.5 h-3.5" />
+                    {{ t('geneMarket.manageCategories') }}
+                  </button>
+                </div>
+                <p v-if="!uploadCategory" class="text-xs text-gray-400">
+                  {{ t('geneMarket.categoryRequired') }}
                 </p>
 
                 <input
@@ -947,6 +1131,75 @@ function hasNativeTools(gene: GeneItem): boolean {
             </button>
           </div>
         </template>
+
+        <!-- ═══ 分类管理弹窗（仅管理员） ═══ -->
+        <div
+          v-if="showCategoryDialog"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          @click.self="showCategoryDialog = false"
+        >
+          <div class="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-lg">
+            <h3 class="flex items-center gap-2 text-sm font-semibold mb-1">
+              <Settings class="w-4 h-4 text-primary" />
+              {{ t('geneMarket.manageCategories') }}
+            </h3>
+            <p class="text-xs text-muted-foreground mb-4">{{ t('geneMarket.manageCategoriesHint') }}</p>
+
+            <div class="flex flex-wrap gap-2 mb-4 min-h-8">
+              <span
+                v-for="(name, idx) in categoryDraft"
+                :key="name"
+                class="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 text-sm"
+              >
+                {{ name }}
+                <button
+                  class="text-muted-foreground hover:text-destructive"
+                  :title="t('geneMarket.removeCategory')"
+                  @click="categoryDraft.splice(idx, 1)"
+                >
+                  <X class="w-3 h-3" />
+                </button>
+              </span>
+              <span v-if="!categoryDraft.length" class="text-xs text-muted-foreground self-center">
+                {{ t('geneMarket.noCategories') }}
+              </span>
+            </div>
+
+            <div class="flex gap-2 mb-4">
+              <input
+                v-model="newCategoryInput"
+                type="text"
+                maxlength="32"
+                class="flex-1 px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                :placeholder="t('geneMarket.newCategoryPlaceholder')"
+                @keyup.enter="addDraftCategory"
+              />
+              <button
+                class="px-3 py-1.5 rounded-lg border border-border text-sm hover:border-primary/50 hover:text-primary transition-colors"
+                @click="addDraftCategory"
+              >
+                {{ t('geneMarket.addCategory') }}
+              </button>
+            </div>
+
+            <div class="flex justify-end gap-2">
+              <button
+                class="px-4 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground"
+                @click="showCategoryDialog = false"
+              >
+                {{ t('common.cancel') }}
+              </button>
+              <button
+                class="px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+                :disabled="savingCategories"
+                @click="saveCategories"
+              >
+                <Loader2 v-if="savingCategories" class="w-4 h-4 animate-spin inline mr-1" />
+                {{ t('common.save') }}
+              </button>
+            </div>
+          </div>
+        </div>
     </div>
   </div>
 </template>

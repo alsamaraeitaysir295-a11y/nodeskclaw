@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.base import not_deleted
@@ -101,7 +101,13 @@ class LocalAdapter(RegistryAdapter):
             return RegistrySearchResult(items=[], total=0)
 
         async with self._session_factory() as db:
-            base = select(Gene).where(not_deleted(Gene), Gene.is_published.is_(True))
+            # 平台种子基因（source=official 且无创建者）不属于技能市场内容，列表一律隐藏
+            # （与 gene_service._list_genes_local / 榜单口径保持一致，同步修改）
+            base = select(Gene).where(
+                not_deleted(Gene),
+                Gene.is_published.is_(True),
+                not_(and_(Gene.source == "official", Gene.created_by.is_(None))),
+            )
 
             if visibility == "org_private":
                 base = base.where(Gene.visibility == "org_private", Gene.org_id == org_id)

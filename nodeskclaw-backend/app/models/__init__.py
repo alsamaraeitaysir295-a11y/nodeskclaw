@@ -75,6 +75,8 @@ from app.models.external_agent import ExternalAgent  # noqa: F401
 from app.models.external_agent_chat import ExternalAgentChatSession, ExternalAgentMessage  # noqa: F401
 from app.models.external_agent_function import ExternalAgentFunction  # noqa: F401
 from app.models.external_agent_invocation import ExternalAgentInvocation  # noqa: F401
+from app.models.gene_market_event import GeneMarketEvent  # noqa: F401
+from app.models.gene_category import GeneCategory  # noqa: F401
 from app.models.workspace_deploy import WorkspaceDeploy  # noqa: F401
 
 # RBAC 第一期模型（roles / menus / apps / subject_roles / role_menus / role_apps / permission_audit_logs）

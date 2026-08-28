@@ -31,8 +31,10 @@ import { renderMarkdown } from '@/utils/markdown'
 import { useGeneStore } from '@/stores/gene'
 import type { GeneItem, GenomeItem } from '@/stores/gene'
 import api from '@/services/api'
+import { skillApi } from '@/services/skills'
 import { useToast } from '@/composables/useToast'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
+import { iconColorClass } from '@/utils/skillIconColor'
 
 const props = defineProps<{
   modelValue: boolean
@@ -83,7 +85,18 @@ const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = 12
 
-const categories = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
+// 分类列表：与市场页共用后端管理列表，加载失败回退默认八类
+const DEFAULT_CATEGORIES = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
+const categories = ref<string[]>([...DEFAULT_CATEGORIES])
+
+async function loadCategories() {
+  try {
+    const list = await skillApi.getCategories()
+    if (list.length) categories.value = list.map(c => c.name)
+  } catch {
+    // 分类加载失败不阻塞弹窗，沿用默认列表
+  }
+}
 const sortOptions = ['popularity', 'rating', 'effectiveness', 'newest']
 
 // ── Installed gene tracking ─────────────────────
@@ -322,7 +335,8 @@ function getSortLabel(value: string) {
 
 const categorySelectOptions = computed(() => [
   { value: null, label: t('geneMarket.allCategories') },
-  ...categories.map(c => ({ value: c, label: localizeGeneMeta(c) })),
+  // 分类为管理员可编辑的自由文本，直接展示原文（与市场页一致）
+  ...categories.value.map(c => ({ value: c, label: c })),
 ])
 
 const sortSelectOptions = computed(() =>
@@ -447,6 +461,7 @@ watch(() => props.modelValue, async (open) => {
     sortBy.value = 'popularity'
     page.value = 1
     localInstalledSlugs.value = new Set()
+    loadCategories()
     await loadTags()
     await loadData()
   }
@@ -564,83 +579,76 @@ onUnmounted(() => {
                   <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
                 </div>
 
-                <!-- Gene cards -->
+                <!-- Gene 行式列表：与技能市场主页同款（多彩 squircle 图标 + 名称 + 分类胶囊 + 右侧数据/操作列） -->
                 <template v-else-if="viewMode === 'genes'">
-                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div class="rounded-xl border border-border bg-background divide-y divide-border overflow-hidden">
                     <div
                       v-for="gene in genes"
                       :key="gene.id"
-                      class="p-4 rounded-xl border border-border bg-background hover:border-primary/30 transition cursor-pointer relative overflow-hidden"
+                      class="flex items-center gap-4 px-4 py-2 hover:bg-muted/30 transition cursor-pointer"
                       @click="openGeneDetail(gene.slug)"
                     >
                       <div
-                        v-if="isInstalled(gene.slug)"
-                        class="absolute top-0 right-0 w-6 h-6 bg-green-600 rounded-bl-lg flex items-center justify-center"
+                        :class="['w-12 h-12 rounded-2xl flex items-center justify-center shrink-0', iconColorClass(gene.slug)]"
                       >
-                        <Check class="w-3 h-3 text-white" />
-                      </div>
-                      <div class="flex items-start gap-3 mb-2">
-                        <div class="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                          <component :is="resolveIcon(gene.icon)" class="w-4 h-4 text-primary" />
-                        </div>
-                        <div class="min-w-0 flex-1">
-                          <div class="flex items-center gap-2 flex-wrap">
-                            <span class="font-medium text-sm truncate">{{ gene.name }}</span>
-                            <span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">v{{ gene.version }}</span>
-                            <span
-                              v-if="hasNativeTools(gene)"
-                              class="shrink-0 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
-                            >
-                              {{ t('geneMarket.hasNativeTools') }}
-                            </span>
-                          </div>
-                          <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
-                            {{ gene.short_description ?? gene.description ?? '' }}
-                          </p>
-                        </div>
-                      </div>
-                      <div class="flex flex-wrap gap-1 mt-2">
-                        <span
-                          v-for="tag in gene.tags.slice(0, 3)"
-                          :key="tag"
-                          class="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary"
-                        >
-                          {{ localizeGeneMeta(tag) }}
-                        </span>
-                      </div>
-                      <div class="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                        <span class="flex items-center gap-0.5">
-                          <Star class="w-3 h-3 fill-amber-400 text-amber-400" />
-                          {{ (gene.avg_rating ?? 0).toFixed(1) }}
-                        </span>
-                        <div class="flex-1 min-w-0">
-                          <div class="h-1 rounded-full bg-muted overflow-hidden">
-                            <div class="h-full rounded-full bg-primary/60" :style="{ width: `${Math.min(100, (gene.effectiveness_score ?? 0) * 100)}%` }" />
-                          </div>
-                        </div>
-                        <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
+                        <component :is="resolveIcon(gene.icon)" class="w-6 h-6 text-white" />
                       </div>
 
-                      <!-- Fork 按钮：仅公共市场卡片显示，点击不触发详情打开 -->
-                      <div v-if="scopeMode === 'public'" class="flex items-center gap-2 mt-3 pt-3 border-t border-border">
-                        <button
-                          class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                          :disabled="forking === gene.id"
-                          @click.stop="handleForkGene(gene.id, 'personal')"
-                        >
-                          <Loader2 v-if="forking === gene.id" class="w-3 h-3 animate-spin" />
-                          <Download v-else class="w-3 h-3" />
-                          {{ t('geneMarket.forkToPersonal') }}
-                        </button>
-                        <button
-                          class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                          :disabled="forking === gene.id"
-                          @click.stop="handleForkGene(gene.id, 'org')"
-                        >
-                          <Loader2 v-if="forking === gene.id" class="w-3 h-3 animate-spin" />
-                          <Download v-else class="w-3 h-3" />
-                          {{ t('geneMarket.forkToOrg') }}
-                        </button>
+                      <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <span class="font-semibold truncate">{{ gene.name }}</span>
+                          <span
+                            v-if="gene.category"
+                            class="shrink-0 text-xs px-2 py-0.5 rounded bg-muted/70 text-muted-foreground"
+                          >
+                            {{ gene.category }}
+                          </span>
+                          <!-- 已安装标记 -->
+                          <span
+                            v-if="isInstalled(gene.slug)"
+                            class="shrink-0 inline-flex items-center gap-0.5 text-xs text-green-600 dark:text-green-400"
+                          >
+                            <Check class="w-3 h-3" />
+                            {{ t('geneMarketDialog.alreadyLearned') }}
+                          </span>
+                        </div>
+                        <p class="text-sm text-muted-foreground line-clamp-1 mt-0.5">
+                          {{ gene.short_description ?? gene.description ?? '' }}
+                        </p>
+                      </div>
+
+                      <!-- 右侧数据列：评分/学习次数 + Fork 按钮（仅公共市场） -->
+                      <div class="flex flex-col items-end gap-2 shrink-0" @click.stop>
+                        <div class="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+                          <span class="flex items-center gap-1">
+                            <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                            {{ (gene.avg_rating ?? 0).toFixed(1) }}
+                          </span>
+                          <span class="flex items-center gap-1">
+                            <Download class="w-3.5 h-3.5" />
+                            {{ gene.install_count ?? 0 }}
+                          </span>
+                        </div>
+                        <div v-if="scopeMode === 'public'" class="flex items-center gap-1.5">
+                          <button
+                            class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                            :disabled="forking === gene.id"
+                            @click.stop="handleForkGene(gene.id, 'personal')"
+                          >
+                            <Loader2 v-if="forking === gene.id" class="w-3 h-3 animate-spin" />
+                            <Download v-else class="w-3 h-3" />
+                            {{ t('geneMarket.forkToPersonal') }}
+                          </button>
+                          <button
+                            class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                            :disabled="forking === gene.id"
+                            @click.stop="handleForkGene(gene.id, 'org')"
+                          >
+                            <Loader2 v-if="forking === gene.id" class="w-3 h-3 animate-spin" />
+                            <Download v-else class="w-3 h-3" />
+                            {{ t('geneMarket.forkToOrg') }}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -649,48 +657,51 @@ onUnmounted(() => {
                   </div>
                 </template>
 
-                <!-- Genome cards -->
+                <!-- Genome 行式列表：与技能基因列表同款风格 -->
                 <template v-else>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div class="rounded-xl border border-border bg-background divide-y divide-border overflow-hidden">
                     <div
                       v-for="genome in genomes"
                       :key="genome.id"
-                      class="p-4 rounded-xl border border-border bg-background hover:border-primary/30 transition cursor-pointer"
+                      class="flex items-center gap-4 px-4 py-2 hover:bg-muted/30 transition cursor-pointer"
                       @click="openGenomeDetail(genome.id)"
                     >
-                      <div class="flex items-start gap-3 mb-2">
-                        <div class="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                          <component :is="resolveIcon(genome.icon)" class="w-4 h-4 text-primary" />
-                        </div>
-                        <div class="min-w-0 flex-1">
-                          <div class="flex items-center gap-2 flex-wrap">
-                            <span class="font-medium text-sm truncate">{{ genome.name }}</span>
-                            <span
-                              v-if="genome.native_tool_count"
-                              class="shrink-0 inline-flex items-center gap-1 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
-                            >
-                              <Wrench class="w-3 h-3" />
-                              {{ t('genome.nativeToolCount', { count: genome.native_tool_count }) }}
-                            </span>
-                            <span
-                              v-if="genome.mcp_server_count"
-                              class="shrink-0 inline-flex items-center gap-1 bg-violet-500/10 text-violet-400 text-[10px] px-1.5 py-0.5 rounded"
-                            >
-                              <Server class="w-3 h-3" />
-                              {{ t('genome.mcpServerCount', { count: genome.mcp_server_count }) }}
-                            </span>
-                          </div>
-                          <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
-                            {{ genome.short_description ?? genome.description ?? '' }}
-                          </p>
-                        </div>
+                      <div
+                        :class="['w-12 h-12 rounded-2xl flex items-center justify-center shrink-0', iconColorClass(genome.id)]"
+                      >
+                        <component :is="resolveIcon(genome.icon)" class="w-6 h-6 text-white" />
                       </div>
-                      <div class="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                        <span class="flex items-center gap-0.5">
-                          <Star class="w-3 h-3 fill-amber-400 text-amber-400" />
+                      <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <span class="font-semibold truncate">{{ genome.name }}</span>
+                          <span
+                            v-if="genome.native_tool_count"
+                            class="shrink-0 inline-flex items-center gap-1 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
+                          >
+                            <Wrench class="w-3 h-3" />
+                            {{ t('genome.nativeToolCount', { count: genome.native_tool_count }) }}
+                          </span>
+                          <span
+                            v-if="genome.mcp_server_count"
+                            class="shrink-0 inline-flex items-center gap-1 bg-violet-500/10 text-violet-400 text-[10px] px-1.5 py-0.5 rounded"
+                          >
+                            <Server class="w-3 h-3" />
+                            {{ t('genome.mcpServerCount', { count: genome.mcp_server_count }) }}
+                          </span>
+                        </div>
+                        <p class="text-sm text-muted-foreground line-clamp-1 mt-0.5">
+                          {{ genome.short_description ?? genome.description ?? '' }}
+                        </p>
+                      </div>
+                      <div class="flex flex-col items-end gap-1 shrink-0 text-xs text-muted-foreground tabular-nums">
+                        <span class="flex items-center gap-1">
+                          <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                           {{ (genome.avg_rating ?? 0).toFixed(1) }}
                         </span>
-                        <span class="shrink-0">{{ t('geneMarket.learnCount', { count: genome.install_count ?? 0 }) }}</span>
+                        <span class="flex items-center gap-1">
+                          <Download class="w-3.5 h-3.5" />
+                          {{ genome.install_count ?? 0 }}
+                        </span>
                       </div>
                     </div>
                   </div>

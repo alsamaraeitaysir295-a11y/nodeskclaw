@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Coroutine
 from urllib.parse import urlencode
 
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, func, not_, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -600,13 +600,34 @@ async def _list_genes_local(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict], int]:
-    base = select(Gene).where(not_deleted(Gene), Gene.is_published.is_(True))
+    # 平台种子基因（source=official 且无创建者，含 nodeskclaw-* 协作工具与预置技能）
+    # 不属于用户在技能市场产生/获取的内容，列表一律隐藏（口径见 gene_market_stat_service）
+    base = select(Gene).where(
+        not_deleted(Gene),
+        Gene.is_published.is_(True),
+        not_(and_(Gene.source == "official", Gene.created_by.is_(None))),
+    )
 
     if visibility == "personal":
         # 个人 library：必须按 created_by 过滤；user_id 为空时返回空集（避免越权）
         if not user_id:
             return [], 0
         base = base.where(Gene.visibility == "personal", Gene.created_by == user_id)
+    elif visibility == "all":
+        # 全部：公共市场 + 本组织 + 个人（市场页默认视图，2026-08-27 产品口径）
+        base = base.where(
+            or_(
+                and_(
+                    Gene.visibility == "public",
+                    or_(
+                        Gene.review_status == GeneReviewStatus.approved,
+                        Gene.review_status.is_(None),
+                    ),
+                ),
+                and_(Gene.visibility == "org_private", Gene.org_id == org_id),
+                and_(Gene.visibility == "personal", Gene.created_by == user_id),
+            )
+        )
     elif visibility == "org_private":
         base = base.where(Gene.visibility == "org_private", Gene.org_id == org_id)
     elif visibility == "public":
@@ -681,8 +702,9 @@ async def list_genes(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict], int]:
-    # 个人 library 仅存在于本地 DB，不走聚合器（远程注册表没有个人数据）
-    if visibility == "personal":
+    # 个人 library 仅存在于本地 DB，不走聚合器（远程注册表没有个人数据）；
+    # all = 公共+组织+个人 的并集，同样本地直查（远程注册表只有公共数据，走 public 档位时才聚合）
+    if visibility in ("personal", "all"):
         return await _list_genes_local(
             db,
             keyword=keyword, tag=tag, category=category, source=source,

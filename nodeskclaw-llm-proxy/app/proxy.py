@@ -24,6 +24,7 @@ from app.codex_cli import (
 from app.config import settings
 from app.database import get_session
 from app.models import Instance, InstanceProviderConfig, LlmUsageLog, OrgLlmKey, UserLlmConfig, UserLlmKey, not_deleted
+from app import skill_usage
 
 logger = logging.getLogger(__name__)
 
@@ -876,6 +877,11 @@ async def _handle_gemini_proxy(
 
     response_body = json.dumps(response_data, ensure_ascii=False).encode("utf-8")
     usage = _parse_usage_from_response(response_body)
+    # skill 使用埋点：response_data 已是 OpenAI 格式（含 tool_calls），直接喂入
+    if not ctx.is_probe:
+        _collector = skill_usage.ToolCallCollector()
+        _collector.feed_response(response_data)
+        skill_usage.schedule_record(ctx.instance, _collector.complete_calls())
     await _record_usage(
         ctx,
         usage=usage,
@@ -1158,6 +1164,16 @@ async def _handle_non_stream(
 
     usage = _parse_usage_from_response(resp_body) if resp.status_code < 400 else {}
     response_meta = _strip_content_from_response(resp_body)
+    # skill 使用埋点：解析响应中模型新发起的 tool_calls（仅 2xx，后台任务非阻塞）
+    if not ctx.is_probe and resp.status_code < 400 and resp_body:
+        try:
+            _parsed_resp = json.loads(resp_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            _parsed_resp = None
+        if isinstance(_parsed_resp, dict):
+            _collector = skill_usage.ToolCallCollector()
+            _collector.feed_response(_parsed_resp)
+            skill_usage.schedule_record(ctx.instance, _collector.complete_calls())
     error_msg = None
     if resp.status_code >= 400:
         try:
@@ -1249,6 +1265,8 @@ async def _handle_stream(
         return JSONResponse(status_code=502, content={"error": f"上游请求失败: {e}"})
 
     usage_data: dict = {}
+    # skill 使用埋点：跨 chunk 累积模型新发起的 tool_calls
+    _tc_collector = skill_usage.ToolCallCollector()
 
     async def stream_generator():
         nonlocal usage_data
@@ -1259,6 +1277,14 @@ async def _handle_stream(
                 parsed = _parse_usage_from_sse_chunk(line)
                 if parsed:
                     usage_data = parsed
+                # 仅含 tool_calls 增量的行才解析喂入，普通行零开销跳过
+                if not ctx.is_probe and '"tool_calls"' in line:
+                    stripped = line.strip()
+                    if stripped.startswith("data: ") and stripped != "data: [DONE]":
+                        try:
+                            _tc_collector.feed_chunk(json.loads(stripped[6:]))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
                 if not stream_error:
                     stream_error = _extract_sse_error(line)
                 if line.strip() == "data: [DONE]":
@@ -1275,6 +1301,9 @@ async def _handle_stream(
             if stream_error:
                 logger.warning("SSE stream error from %s: %s", ctx.provider, stream_error[:512])
             response_meta = json.dumps(usage_data, ensure_ascii=False) if usage_data else None
+            # skill 使用埋点：流结束后归因写入（同样走独立 task，规避 cancel scope）
+            if not ctx.is_probe:
+                skill_usage.schedule_record(ctx.instance, _tc_collector.complete_calls())
             # 用独立 task 记录用量：finally 块在请求 cancel scope 内运行，
             # 直接 await DB 会因 asyncpg 连接终止时 cancel scope 已激活而抛 CancelledError
             asyncio.create_task(_record_usage(

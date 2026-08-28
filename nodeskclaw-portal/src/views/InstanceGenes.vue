@@ -28,9 +28,17 @@ const loadError = ref('')
 const instanceSkills = computed(() => store.instanceSkills)
 const marketDialogOpen = ref(false)
 
-const installedSkillNames = computed(() =>
-  new Set(instanceSkills.value.map(s => s.skill_name)),
-)
+// 已安装标记集合：同时收 skill_name（部署目录名 = manifest.skill.name ?? slug）
+// 与 gene.slug（市场列表条目的标识）。manifest 技能名与 slug 不一致时，
+// 市场弹窗按 slug 匹配也能命中，避免"已安装却无标记"
+const installedSkillNames = computed(() => {
+  const names = new Set<string>()
+  for (const item of instanceSkills.value) {
+    names.add(item.skill_name)
+    if (item.gene?.slug) names.add(item.gene.slug)
+  }
+  return names
+})
 
 const focusGeneId = computed(() => {
   const value = route.query.focus_gene_id
