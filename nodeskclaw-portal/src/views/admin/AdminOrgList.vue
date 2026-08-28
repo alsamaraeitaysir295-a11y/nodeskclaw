@@ -134,7 +134,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="space-y-5">
+  <div class="p-6 space-y-5">
     <div class="flex items-center justify-between">
       <div>
         <h2 class="text-lg font-semibold">组织管理</h2>
@@ -172,7 +172,6 @@ onMounted(async () => {
           <tr class="border-b border-border bg-muted/40">
             <th class="text-left font-medium text-muted-foreground px-4 py-3">名称</th>
             <th class="text-left font-medium text-muted-foreground px-4 py-3 hidden md:table-cell">Slug</th>
-            <th class="text-left font-medium text-muted-foreground px-4 py-3 hidden lg:table-cell">套餐</th>
             <th class="text-right font-medium text-muted-foreground px-4 py-3">实例数</th>
             <th class="text-right font-medium text-muted-foreground px-4 py-3 hidden sm:table-cell">创建时间</th>
             <th class="text-right font-medium text-muted-foreground px-4 py-3">操作</th>
@@ -191,9 +190,6 @@ onMounted(async () => {
             </td>
             <td class="px-4 py-3 hidden md:table-cell">
               <span class="font-mono text-xs text-muted-foreground">{{ org.slug }}</span>
-            </td>
-            <td class="px-4 py-3 hidden lg:table-cell">
-              <span class="px-2 py-0.5 rounded text-xs bg-muted font-medium">{{ org.plan }}</span>
             </td>
             <td class="px-4 py-3 text-right">
               <span class="font-mono">{{ org.instance_count }}</span>
@@ -243,12 +239,9 @@ onMounted(async () => {
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="block text-sm font-medium mb-1.5">套餐</label>
-              <input v-model="form.plan" type="text" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-            </div>
-            <div>
               <label class="block text-sm font-medium mb-1.5">最大实例数</label>
               <input v-model.number="form.max_instances" type="number" min="1" class="h-9 w-full px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+              <p class="text-xs text-muted-foreground mt-1">部署 AI 员工时按此上限拦截</p>
             </div>
           </div>
         </div>

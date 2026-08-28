@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func as sa_func
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -182,6 +182,35 @@ async def update_user(
     info = AdminUserInfo.model_validate(u)
     info.org_count = org_count
     return ApiResponse[AdminUserInfo](data=info)
+
+
+class AdminUserCreate(BaseModel):
+    """超管直接创建账号的请求体（密码由后端生成临时密码，首登强制改密）。"""
+
+    name: str = Field(..., min_length=1, max_length=128)
+    email: str | None = Field(None, max_length=256)
+    is_super_admin: bool = False
+
+
+@router.post("", response_model=ApiResponse[dict])
+async def create_user(
+    req: AdminUserCreate,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin_dep),
+):
+    """创建账号，返回用户信息 + 明文临时密码（仅本次返回）。"""
+    user, temp = await user_admin_service.create_user(
+        db,
+        admin=admin,
+        name=req.name,
+        email=req.email,
+        is_super_admin=req.is_super_admin,
+    )
+    await db.commit()
+    return ApiResponse[dict](data={
+        "user": AdminUserInfo.model_validate(user).model_dump(),
+        "temp_password": temp,
+    })
 
 
 @router.post("/{user_id}/reset-password", response_model=ApiResponse[dict])

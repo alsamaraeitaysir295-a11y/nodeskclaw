@@ -169,7 +169,10 @@ function onLocaleChange(value: string) {
               v-if="authStore.user?.is_super_admin"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
-                route.path.startsWith('/admin/') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
+                // 知识库路由挂在 /admin/knowledge-bases 前缀下，但不属于超管后台，高亮需排除
+                route.path.startsWith('/admin/') && !route.path.startsWith('/admin/knowledge-bases')
+                  ? 'bg-primary/10 text-primary font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
               ]"
               @click="router.push('/admin/orgs')"
             >

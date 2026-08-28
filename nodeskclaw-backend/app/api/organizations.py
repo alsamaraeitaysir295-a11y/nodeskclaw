@@ -96,7 +96,7 @@ async def list_org_directory(
 
 
 async def _enrich_org_info(org: Organization, db: AsyncSession) -> OrgInfo:
-    """补充 cluster_name 和 member_count。"""
+    """补充 cluster_name / member_count / instance_count。"""
     cluster_name = None
     if org.cluster_id:
         from app.models.cluster import Cluster
@@ -117,9 +117,19 @@ async def _enrich_org_info(org: Organization, db: AsyncSession) -> OrgInfo:
             OrgMembership.user_id.notin_(admin_user_ids_sub),
         )
     )
+    # 活跃实例数（与超管列表 EE 版 / 配额校验同口径：running + deploying 且未删除）
+    from app.models.instance import Instance, InstanceStatus
+    instance_count_result = await db.execute(
+        select(func.count(Instance.id)).where(
+            Instance.org_id == org.id,
+            Instance.deleted_at.is_(None),
+            Instance.status.in_([InstanceStatus.running, InstanceStatus.deploying]),
+        )
+    )
     info = OrgInfo.model_validate(org)
     info.cluster_name = cluster_name
     info.member_count = member_count_result.scalar_one() or 0
+    info.instance_count = instance_count_result.scalar_one() or 0
     return info
 
 

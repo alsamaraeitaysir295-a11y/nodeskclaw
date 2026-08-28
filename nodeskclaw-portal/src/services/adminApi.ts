@@ -26,6 +26,7 @@ export interface AdminUser {
 
 export interface AdminUserPatch {
   is_active?: boolean
+  is_super_admin?: boolean
 }
 
 // ── 用户组织成员关系 ────────────────────────────────────
@@ -239,6 +240,16 @@ export function useAdminApi(http?: AxiosInstance) {
     return res.data.data
   }
 
+  /** 超管直接创建账号：返回用户 + 一次性临时密码（仅本次可见） */
+  async function createUser(body: {
+    name: string
+    email?: string
+    is_super_admin?: boolean
+  }): Promise<{ user: AdminUser; temp_password: string }> {
+    const res = await client.post('/admin/users', body)
+    return res.data.data
+  }
+
   async function resetUserPassword(id: string): Promise<{ temp_password: string }> {
     const res = await client.post(`/admin/users/${id}/reset-password`)
     return res.data.data
@@ -351,6 +362,7 @@ export function useAdminApi(http?: AxiosInstance) {
     fetchUsers,
     fetchUser,
     updateUser,
+    createUser,
     resetUserPassword,
     deleteUser,
     fetchUserOrgs,

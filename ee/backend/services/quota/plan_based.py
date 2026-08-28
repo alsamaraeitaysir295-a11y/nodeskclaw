@@ -31,15 +31,31 @@ class PlanBasedQuotaChecker(QuotaChecker):
     ) -> None:
         from app.core.exceptions import BadRequestError
 
-        # 1. 查找组织的套餐
+        # 1. 查找组织的套餐；套餐体系已下线（2026-08-28 产品决策），
+        # 无套餐时回退用组织自身的 max_instances 做实例数上限（该值超管在组织编辑里设置），
+        # CPU/内存/存储配额仅在有套餐时校验
         plan_result = await db.execute(
             select(Plan).where(Plan.name == org.plan, Plan.is_active.is_(True))
         )
         plan = plan_result.scalar_one_or_none()
 
         if not plan:
-            # 套餐不存在或未激活，默认允许（兼容无套餐情况）
-            logger.warning("组织 %s 的套餐 %s 不存在或未激活，跳过配额检查", org.id, org.plan)
+            max_instances = int(org.max_instances or 0)
+            if max_instances > 0:
+                current = (
+                    await db.execute(
+                        select(func.count(Instance.id)).where(
+                            Instance.org_id == org.id,
+                            Instance.deleted_at.is_(None),
+                            Instance.status.in_([InstanceStatus.running, InstanceStatus.deploying]),
+                        )
+                    )
+                ).scalar_one()
+                if current >= max_instances:
+                    raise BadRequestError(
+                        message=f"实例数量超限：当前 {current} 个，最多 {max_instances} 个（组织上限）",
+                        message_key="errors.quota.instance_limit_exceeded",
+                    )
             return
 
         # 2. 统计当前实例数量

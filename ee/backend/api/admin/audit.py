@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db, require_super_admin_dep
@@ -16,6 +17,26 @@ from ee.backend.services.admin import audit_service
 from ee.backend.services.admin.errors import AdminErrorCode, raise_admin_error
 
 router = APIRouter()
+
+
+async def _resolve_actor_ids(db: AsyncSession, actor: str | None) -> list[str] | None:
+    """操作人筛选支持姓名/邮箱/ID：按模糊词解析出用户 id 集合。
+
+    - 无输入返回 None（不过滤）
+    - 按姓名/邮箱/精确 ID 匹配用户；匹配不到时回退按原值精确匹配
+      （兼容 agent / system 等非用户 actor_id），仍匹配不到则返回空列表 → 结果为空
+    """
+    if not actor or not actor.strip():
+        return None
+    keyword = actor.strip()
+    like = f"%{keyword}%"
+    rows = (await db.execute(
+        select(User.id).where(
+            User.deleted_at.is_(None),
+            or_(User.name.ilike(like), User.email.ilike(like), User.id == keyword),
+        )
+    )).scalars().all()
+    return list(rows) or [keyword]
 
 
 @router.get("/audit/actions", response_model=ApiResponse[list[str]])
@@ -60,7 +81,7 @@ async def list_audit(
 
     rows, total = await audit_service.query_audit_logs(
         db,
-        actor_id=actor,
+        actor_ids=await _resolve_actor_ids(db, actor),
         action=action_enum,
         from_dt=from_ts,
         to_dt=to_ts,

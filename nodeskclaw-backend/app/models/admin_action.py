@@ -21,6 +21,7 @@ class AdminAction(str, Enum):
     ORG_MEMBER_UPDATE = "org_member.update"
     ORG_MEMBER_REMOVE = "org_member.remove"
     # 用户
+    USER_CREATE = "user.create"
     USER_UPDATE = "user.update"
     USER_RESET_PASSWORD = "user.reset_password"
     USER_DELETE = "user.delete"

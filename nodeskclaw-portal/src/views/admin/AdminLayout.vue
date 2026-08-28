@@ -37,13 +37,13 @@
 </template>
 
 <script setup lang="ts">
-import { Home, Building2, Users, ToggleLeft, ClipboardList } from 'lucide-vue-next'
+import { Home, Building2, Users, ClipboardList } from 'lucide-vue-next'
 
 // 侧边栏导航项定义
+// 注：功能开关（/admin/features）暂不展示（产品要求，2026-08-27），恢复时加回即可
 const navItems = [
   { to: '/admin/orgs', icon: Building2, label: '组织' },
   { to: '/admin/users', icon: Users, label: '用户' },
-  { to: '/admin/features', icon: ToggleLeft, label: '功能开关' },
   { to: '/admin/audit', icon: ClipboardList, label: '审计日志' },
 ]
 </script>

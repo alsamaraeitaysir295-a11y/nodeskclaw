@@ -21,7 +21,9 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]{1,62}[a-z0-9]$")
 
 
 async def list_orgs(db: AsyncSession) -> list[OrgInfo]:
-    """列出所有组织（超管使用），附带成员数（排除 Admin 平台用户）。"""
+    """列出所有组织（超管使用），附带成员数（排除 Admin 平台用户）与活跃实例数。"""
+    from app.models.instance import Instance, InstanceStatus
+
     admin_user_ids_corr = (
         select(AdminMembership.user_id)
         .where(AdminMembership.org_id == Organization.id, AdminMembership.deleted_at.is_(None))
@@ -38,15 +40,28 @@ async def list_orgs(db: AsyncSession) -> list[OrgInfo]:
         .scalar_subquery()
         .label("member_count")
     )
+    # 活跃实例数（running + deploying 且未删除，与配额校验口径一致）
+    instance_count_sub = (
+        select(func.count(Instance.id))
+        .where(
+            Instance.org_id == Organization.id,
+            Instance.deleted_at.is_(None),
+            Instance.status.in_([InstanceStatus.running, InstanceStatus.deploying]),
+        )
+        .correlate(Organization)
+        .scalar_subquery()
+        .label("instance_count")
+    )
     result = await db.execute(
-        select(Organization, member_count_sub)
+        select(Organization, member_count_sub, instance_count_sub)
         .where(not_deleted(Organization))
         .order_by(Organization.created_at.desc())
     )
     orgs = []
-    for org, count in result.all():
+    for org, member_count, instance_count in result.all():
         info = OrgInfo.model_validate(org)
-        info.member_count = count or 0
+        info.member_count = member_count or 0
+        info.instance_count = instance_count or 0
         orgs.append(info)
     return orgs
 

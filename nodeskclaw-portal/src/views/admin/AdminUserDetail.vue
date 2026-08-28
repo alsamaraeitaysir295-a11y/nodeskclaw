@@ -16,7 +16,8 @@
             平台超管
           </span>
         </h2>
-        <p class="text-sm text-muted-foreground mt-0.5">{{ user.email }}</p>
+        <!-- 无邮箱用户（姓名注册）不显示邮箱行，避免空行 -->
+        <p v-if="user.email" class="text-sm text-muted-foreground mt-0.5">{{ user.email }}</p>
       </div>
       <button
         v-if="!user.is_super_admin"
@@ -34,7 +35,7 @@
     <div v-if="user" class="rounded-lg border border-border p-4">
       <dl class="grid grid-cols-2 gap-x-6 gap-y-2.5 text-sm">
         <dt class="text-muted-foreground">创建时间</dt>
-        <dd>{{ user.created_at }}</dd>
+        <dd class="tabular-nums">{{ formatDateTime(user.created_at) }}</dd>
         <dt class="text-muted-foreground">账号状态</dt>
         <dd>
           <span
@@ -88,12 +89,12 @@
                   class="text-sm border border-border rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
                   @change="onRoleChange(m, $event)"
                 >
-                  <option value="admin">admin（管理员）</option>
-                  <option value="operator">operator（操作员）</option>
-                  <option value="member">member（成员）</option>
+                  <option value="admin">管理员</option>
+                  <option value="operator">操作员</option>
+                  <option value="member">成员</option>
                 </select>
               </td>
-              <td class="px-4 py-3 text-muted-foreground text-xs">{{ m.joined_at }}</td>
+              <td class="px-4 py-3 text-muted-foreground text-xs tabular-nums">{{ formatDateTime(m.joined_at) }}</td>
               <td class="px-4 py-3">
                 <button
                   class="text-xs px-2.5 py-1 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors"
@@ -149,6 +150,19 @@ const userOrgs = ref<AdminUserOrg[]>([])
 const tempPwd = ref<string | null>(null)
 const copied = ref(false)
 
+/** 统一时间展示：YYYY/MM/DD HH:mm:ss（本地时区） */
+function formatDateTime(iso: string | undefined): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+/** 确认框展示名：邮箱优先，无邮箱用户回退姓名 */
+function displayName(): string {
+  return user.value?.email || user.value?.name || '该用户'
+}
+
 onMounted(async () => {
   user.value = await api.fetchUser(props.id)
   userOrgs.value = await api.fetchUserOrgs(props.id)
@@ -156,7 +170,7 @@ onMounted(async () => {
 
 async function toggleActive() {
   if (!user.value) return
-  if (!confirm(`确认${user.value.is_active ? '禁用' : '启用'} ${user.value.email}？`)) return
+  if (!confirm(`确认${user.value.is_active ? '禁用' : '启用'} ${displayName()}？`)) return
   await api.updateUser(user.value.id, { is_active: !user.value.is_active })
   user.value = await api.fetchUser(props.id)
 }
@@ -175,7 +189,7 @@ async function onRemoveFromOrg(m: AdminUserOrg) {
 
 async function onReset() {
   if (!user.value) return
-  if (!confirm(`为 ${user.value.email} 重置密码？`)) return
+  if (!confirm(`为 ${displayName()} 重置密码？`)) return
   const r = await api.resetUserPassword(user.value.id)
   tempPwd.value = r.temp_password
   copied.value = false

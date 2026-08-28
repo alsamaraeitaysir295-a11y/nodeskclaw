@@ -44,6 +44,9 @@ class OrgInfo(BaseModel):
     cluster_name: str | None = None
     is_active: bool
     member_count: int = 0
+    # 活跃实例数（running + deploying 且未删除，与超管列表/配额口径一致），
+    # 超管组织列表"实例数 N / 上限"展示用；个人组织列表场景为 0
+    instance_count: int = 0
     created_at: datetime
     updated_at: datetime
 

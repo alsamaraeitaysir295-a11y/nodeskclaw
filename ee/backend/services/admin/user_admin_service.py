@@ -24,6 +24,58 @@ from ee.backend.services.admin.errors import AdminErrorCode, raise_admin_error
 logger = logging.getLogger(__name__)
 
 
+async def create_user(
+    db: AsyncSession,
+    *,
+    admin: User,
+    name: str,
+    email: str | None,
+    is_super_admin: bool = False,
+) -> tuple[User, str]:
+    """超管直接创建账号：生成一次性临时密码（首登强制改密），返回 (user, 明文密码)。
+
+    邮箱可选（平台存在姓名注册用户），传入时做软删范围内的唯一性校验。
+    """
+    email = email.strip().lower() if email else None
+    if email:
+        exists = (
+            await db.execute(
+                select(User).where(User.email == email, User.deleted_at.is_(None))
+            )
+        ).scalars().first()
+        if exists:
+            raise_admin_error(
+                AdminErrorCode.USER_EMAIL_CONFLICT,
+                message_key="errors.admin.user_email_conflict",
+                message="Email already exists",
+            )
+
+    temp = secrets.token_urlsafe(12)
+    user = User(
+        name=name.strip(),
+        email=email,
+        password_hash=hash_password(temp),
+        must_change_password=True,
+        is_active=True,
+        is_super_admin=is_super_admin,
+    )
+    # 先 flush 拿到 id，再写审计（with_audit 的 target_id 需要真实主键）
+    db.add(user)
+    await db.flush()
+    async with audit_service.with_audit(
+        db,
+        action=AdminAction.USER_CREATE,
+        actor=admin,
+        target_type="user",
+        target_id=user.id,
+        before=None,
+        after={"name": user.name, "email": user.email, "is_super_admin": is_super_admin},
+        details={"note": "account created; temp password returned out-of-band"},
+    ):
+        pass
+    return user, temp
+
+
 async def update_user(
     db: AsyncSession, *, admin: User, user_id: str, patch: dict[str, Any]
 ) -> User:

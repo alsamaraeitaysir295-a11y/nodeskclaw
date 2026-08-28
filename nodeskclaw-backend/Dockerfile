@@ -31,6 +31,8 @@ COPY nodeskclaw-backend/pyproject.toml nodeskclaw-backend/uv.lock ./
 RUN uv sync --frozen --no-dev
 
 COPY nodeskclaw-backend/ .
+# EE 私有模块（超管页面/套餐等功能；NODESKCLAW_EDITION=ee 时由 main.py 挂载）
+COPY ee/ ./ee/
 COPY openclaw-channel-nodeskclaw/ ./openclaw-channel-nodeskclaw/
 COPY openclaw-channel-dingtalk/ ./openclaw-channel-dingtalk/
 COPY features.yaml ./features.yaml

@@ -152,6 +152,7 @@ async def query_audit_logs(
     db: AsyncSession,
     *,
     actor_id: str | None = None,
+    actor_ids: list[str] | None = None,
     action: AdminAction | None = None,
     from_dt: datetime | None = None,
     to_dt: datetime | None = None,
@@ -170,7 +171,12 @@ async def query_audit_logs(
     count_stmt = select(sa_func.count(OperationAuditLog.id))
 
     # 动态拼接过滤条件
-    if actor_id:
+    # actor_ids（按姓名/邮箱解析出的用户集合）优先；为空列表表示按名匹配不到
+    # 任何用户，此时注入一个不可能命中的条件让结果为空（而不是不过滤）
+    if actor_ids is not None:
+        stmt = stmt.where(OperationAuditLog.actor_id.in_(actor_ids or ["__none__"]))
+        count_stmt = count_stmt.where(OperationAuditLog.actor_id.in_(actor_ids or ["__none__"]))
+    elif actor_id:
         stmt = stmt.where(OperationAuditLog.actor_id == actor_id)
         count_stmt = count_stmt.where(OperationAuditLog.actor_id == actor_id)
     if action is not None:
