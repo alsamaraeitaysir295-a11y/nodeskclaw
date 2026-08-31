@@ -83,7 +83,7 @@ cleanup() {
   for pid in "${PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  for port in 4510 4511; do
+  for port in "$BACKEND_PORT" 4511; do
     local remaining
     remaining=$(_find_pids_on_port "$port")
     if [ -n "$remaining" ]; then
@@ -99,6 +99,10 @@ cleanup() {
 }
 
 trap cleanup SIGINT SIGTERM
+
+# ── 端口配置 ──────────────────────────────────────────────
+# 后端端口可用 BACKEND_PORT 覆盖（Windows 上 4510 可能被 svchost 占用等情况）
+BACKEND_PORT="${BACKEND_PORT:-4510}"
 
 # ── 解析参数 ──────────────────────────────────────────────
 MODE=""
@@ -271,7 +275,7 @@ require_port_free() {
   fi
 }
 
-require_port_free 4510 "backend"
+require_port_free "$BACKEND_PORT" "backend"
 require_port_free 4511 "llm-proxy"
 
 # ── 启动服务 ──────────────────────────────────────────────
@@ -281,19 +285,22 @@ export NODESKCLAW_EDITION="$MODE"
 export LLM_PROXY_URL="http://localhost:4511"
 export LLM_PROXY_INTERNAL_URL="http://localhost:4511"
 export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+# portal dev 代理默认指向 4510；后端端口被覆盖时同步指向（vite.config 支持）
+export API_PROXY_TARGET="http://localhost:${BACKEND_PORT}"
 
 if [ -z "${DATABASE_URL:-}" ]; then
   DATABASE_URL=$(grep '^DATABASE_URL=' "$BACKEND_DIR/.env" | head -1 | cut -d= -f2-)
   export DATABASE_URL
 fi
 
-_LLM_PROXY_DB_URL=$(cd "$BACKEND_DIR" && uv run python3 -c "from app.core.config import settings; print(settings.DATABASE_URL)" 2>/dev/null)
+# Windows venv 只有 python.exe（python3 不存在会静默退出 49），统一用 python
+_LLM_PROXY_DB_URL=$(cd "$BACKEND_DIR" && uv run python -c "from app.core.config import settings; print(settings.DATABASE_URL)" 2>/dev/null)
 
 (cd "$LLM_PROXY_DIR" && DATABASE_URL="${_LLM_PROXY_DB_URL:-$DATABASE_URL}" uv run uvicorn app.main:app --host 0.0.0.0 --port 4511 --timeout-graceful-shutdown 3) \
   2>&1 | prefix_output "$CYAN" "llm-prx" &
 PIDS+=($!)
 
-(cd "$BACKEND_DIR" && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 4510 --timeout-graceful-shutdown 3) \
+(cd "$BACKEND_DIR" && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" --timeout-graceful-shutdown 3) \
   2>&1 | prefix_output "$BLUE" "backend" &
 PIDS+=($!)
 
@@ -317,7 +324,7 @@ MODE_UPPER=$(echo "$MODE" | tr '[:lower:]' '[:upper:]')
 echo "${BOLD}========================================${RESET}"
 echo "${BOLD} NoDeskClaw 本地开发环境 (${MODE_UPPER})${RESET}"
 echo "${BOLD}========================================${RESET}"
-echo "  ${BLUE}Backend${RESET}  http://localhost:4510"
+echo "  ${BLUE}Backend${RESET}  http://localhost:${BACKEND_PORT}"
 echo "  ${CYAN}LLM Prx${RESET}  http://localhost:4511"
 echo "  ${GREEN}Portal${RESET}   http://localhost:4517"
 if [ "$RUN_ADMIN" = true ]; then

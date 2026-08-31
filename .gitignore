@@ -82,3 +82,8 @@ scripts/git_stats/total_lines.png
 
 # superpowers SDD 工作区（各实施计划的临时进度/评审产物，不入库）
 .superpowers/
+
+# IDE 一键启动（start-ide）本地产物：便携 PostgreSQL 二进制/数据、登录信息文件
+.tools/
+IDE-登录信息.txt
+.nodeskclaw-dev-data/
