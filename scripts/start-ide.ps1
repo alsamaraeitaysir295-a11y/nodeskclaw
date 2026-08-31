@@ -1,4 +1,4 @@
-# DeskClaw IDE-mode one-click startup (no Docker required).
+﻿# DeskClaw IDE-mode one-click startup (no Docker required).
 # Target audience: people receiving this codebase for the first time.
 # Boots: portable PostgreSQL -> llm-proxy -> backend -> portal, then opens
 # the browser with seeded admin credentials.
