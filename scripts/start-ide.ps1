@@ -34,6 +34,16 @@ function Ok($msg)   { Write-Host "[ide] $msg" -ForegroundColor Green }
 function Warn($msg) { Write-Host "[ide] $msg" -ForegroundColor Yellow }
 function Fail($msg) { Write-Host "[ide] $msg" -ForegroundColor Red; exit 1 }
 
+# 本机探测一律绕过系统代理（Invoke-WebRequest 会吃代理导致 localhost 健康检查误报）
+$env:NO_PROXY = "localhost,127.0.0.1"
+$env:no_proxy = "localhost,127.0.0.1"
+function Test-HttpOk([string]$url) {
+    try {
+        $out = & curl.exe -s --noproxy "*" -o NUL -w "%{http_code}" --max-time 3 $url 2>$null
+        return ($out -eq "200")
+    } catch { return $false }
+}
+
 function Test-PortFree([int]$port) {
     $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     return ($null -eq $c)
@@ -151,10 +161,8 @@ Log "waiting for backend to be ready (first run applies DB migrations, ~1 min)..
 $ready = $false
 for ($i = 0; $i -lt 120; $i++) {
     if (Test-PortFree $BackendPort) { Start-Sleep -Seconds 2; continue }
-    try {
-        $resp = Invoke-WebRequest -Uri "http://localhost:$BackendPort/api/v1/health" -UseBasicParsing -TimeoutSec 2
-        if ($resp.StatusCode -eq 200) { $ready = $true; break }
-    } catch { Start-Sleep -Seconds 2 }
+    if (Test-HttpOk "http://localhost:$BackendPort/api/v1/health") { $ready = $true; break }
+    Start-Sleep -Seconds 2
 }
 if (-not $ready) { Fail "backend not ready after 4 min - check the deskclaw-backend window for errors" }
 Ok "backend ready"
@@ -189,10 +197,8 @@ Pop-Location
 # ── 6. wait for portal, then summary + open browser ──────────────────────
 Log "waiting for portal (vite dev server, ~10-30s first time)..."
 for ($i = 0; $i -lt 60; $i++) {
-    try {
-        $resp = Invoke-WebRequest -Uri "http://localhost:$PortalPort" -UseBasicParsing -TimeoutSec 2
-        if ($resp.StatusCode -eq 200) { break }
-    } catch { Start-Sleep -Seconds 2 }
+    if (Test-HttpOk "http://localhost:$PortalPort") { break }
+    Start-Sleep -Seconds 2
 }
 
 $loginFile = Join-Path $RepoRoot "IDE-登录信息.txt"
