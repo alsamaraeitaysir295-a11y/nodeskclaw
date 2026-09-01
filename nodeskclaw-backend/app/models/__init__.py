@@ -7,6 +7,7 @@ from app.models.blackboard import Blackboard  # noqa: F401
 from app.models.blackboard_file import BlackboardFile  # noqa: F401
 from app.models.blackboard_post import BlackboardPost  # noqa: F401
 from app.models.blackboard_reply import BlackboardReply  # noqa: F401
+from app.models.capability_tag import CapabilityTag  # noqa: F401
 from app.models.circuit_state import CircuitState  # noqa: F401
 from app.models.cluster import Cluster  # noqa: F401
 from app.models.conversation import Conversation  # noqa: F401
@@ -37,6 +38,11 @@ from app.models.instance_member import InstanceMember  # noqa: F401
 from app.models.llm_usage_log import LlmUsageLog  # noqa: F401
 from app.models.message_queue import MessageQueueItem  # noqa: F401
 from app.models.message_schema import MessageSchema  # noqa: F401
+from app.models.mission import Mission  # noqa: F401
+from app.models.mission_artifact import MissionArtifact  # noqa: F401
+from app.models.mission_event import MissionEvent, MissionEventCounter  # noqa: F401
+from app.models.mission_node import MissionNode  # noqa: F401
+from app.models.mission_org_config import MissionOrgConfig  # noqa: F401
 from app.models.node_card import NodeCard  # noqa: F401
 from app.models.node_type import NodeTypeDefinition  # noqa: F401
 from app.models.org_llm_key import OrgLlmKey, OrgModelProvider  # noqa: F401
