@@ -72,6 +72,17 @@ const localFileInputRef = ref<HTMLInputElement>()
 const selectedLocalFiles = ref<string[]>([])
 const localFolderInputRef = ref<HTMLInputElement>()
 
+// ── 上传前逐技能分类（需求 2026-09-01：每个技能独立选类别后一起上传）──
+interface PendingSkill {
+  name: string
+  category: string
+  files: File[]   // 属于该技能的文件子集
+  zipFile?: File  // ZIP 上传时为原始 zip 文件
+}
+const pendingSkills = ref<PendingSkill[]>([])
+const preUploadDialog = ref(false)
+const preUploadUploading = ref(false)
+
 // 上传限制：需与后端 genes.py 的 _MAX_UPLOAD_* 常量保持一致，防内存/存储 DoS
 const MAX_UPLOAD_FILE_SIZE = 10 * 1024 * 1024 // 单文件 10MB
 const MAX_UPLOAD_TOTAL_SIZE = 50 * 1024 * 1024 // 总大小 50MB
@@ -142,13 +153,19 @@ async function doUpload(fileList: FileList | File[], displayName: string) {
   }
 }
 
-/** ZIP 包上传：选中 .zip 后直接走同一上传链路（后端检测单 zip 条目自动解包） */
+/** ZIP 包上传：选中 .zip 后识别技能并弹层逐个选分类 */
 async function handleLocalFile(file: File) {
   if (file.size > MAX_UPLOAD_TOTAL_SIZE) {
     localError.value = `ZIP 包超过大小限制（${MAX_UPLOAD_TOTAL_SIZE / (1024 * 1024)}MB）`
     return
   }
-  await doUpload([file], file.name.replace(/\.zip$/i, ''))
+  pendingSkills.value = [{
+    name: file.name.replace(/\.zip$/i, ''),
+    category: '',
+    files: [file],
+    zipFile: file,
+  }]
+  preUploadDialog.value = true
 }
 
 async function handleLocalFolder() {
@@ -157,14 +174,74 @@ async function handleLocalFolder() {
     localError.value = '请先选择文件夹'
     return
   }
-  // 上传前本地校验大小/数量，避免把超大请求发到后端才被拒绝
   const validationError = validateUploadFiles(input.files)
   if (validationError) {
     localError.value = validationError
     return
   }
-  const folderName = input.files[0]?.webkitRelativePath?.split('/')[0] || '该文件夹'
-  await doUpload(input.files, folderName)
+  // 客户端按 SKILL.md 分组：每个 SKILL.md 所在目录为一个技能
+  const groups = groupFilesBySkill(input.files)
+  if (groups.length === 0) {
+    localError.value = '未找到 SKILL.md 文件（请确认文件夹内包含技能定义）'
+    return
+  }
+  pendingSkills.value = groups.map((g) => ({
+    name: g.name,
+    category: '',
+    files: g.files,
+  }))
+  preUploadDialog.value = true
+}
+
+// 轻量路径操作（避免引入 path 库，前端只需要 basename 和 dirname）
+function baseName(p: string): string {
+  return p.split('/').pop() || p
+}
+function dirName(p: string): string {
+  const parts = p.split('/')
+  parts.pop()
+  return parts.join('/')
+}
+
+/** 把选中的文件按 SKILL.md 位置分组为独立技能 */
+function groupFilesBySkill(files: FileList): Array<{ name: string; files: File[] }> {
+  const fileArr = Array.from(files)
+  const relPath = (f: File) =>
+    (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
+
+  // 每个 SKILL.md 的父目录 → 技能根路径
+  const skillRoots: string[] = []
+  for (const f of fileArr) {
+    if (baseName(relPath(f)).toLowerCase() === 'skill.md') {
+      skillRoots.push(dirName(relPath(f)))
+    }
+  }
+  if (skillRoots.length === 0) {
+    // 没有 SKILL.md：整个选择视为一个技能（后端会校验报错）
+    const folderName = relPath(fileArr[0]).split('/')[0] || '未命名技能'
+    return [{ name: folderName, files: fileArr }]
+  }
+
+  // 按最具体的根路径分组（嵌套时取最深层 SKILL.md 所在目录）
+  const groups = new Map<string, File[]>()
+  for (const f of fileArr) {
+    const path = relPath(f)
+    let matchedRoot = ''
+    for (const root of skillRoots) {
+      if (path.startsWith(root + '/') || path === root) {
+        if (root.length > matchedRoot.length) matchedRoot = root
+      }
+    }
+    if (matchedRoot) {
+      if (!groups.has(matchedRoot)) groups.set(matchedRoot, [])
+      groups.get(matchedRoot)!.push(f)
+    }
+  }
+
+  return Array.from(groups.entries()).map(([root, group]) => ({
+    name: root.split('/').pop() || root,
+    files: group,
+  }))
 }
 
 function onLocalFolderInput(e: Event) {
@@ -173,6 +250,57 @@ function onLocalFolderInput(e: Event) {
   selectedLocalFiles.value = Array.from(input.files).map(
     f => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
   )
+}
+
+/** 上传前弹层确认：逐技能上传（每个带各自分类） */
+async function confirmPreUpload() {
+  if (preUploadUploading.value) return
+  preUploadUploading.value = true
+  localError.value = null
+  let successCount = 0
+  let failCount = 0
+
+  for (const skill of pendingSkills.value) {
+    try {
+      await skillApi.uploadFolder(
+        skill.files, false, 'personal',
+        undefined, skill.category || undefined,
+      )
+      successCount++
+    } catch (e: any) {
+      if (e?.response?.status === 409) {
+        // 同名冲突：确认覆盖
+        const ok = confirm(`${skill.name} 已存在，是否覆盖？`)
+        if (ok) {
+          try {
+            await skillApi.uploadFolder(skill.files, true, 'personal', undefined, skill.category || undefined)
+            successCount++
+          } catch {
+            failCount++
+          }
+        } else {
+          failCount++
+        }
+      } else {
+        failCount++
+        console.warn(`技能 ${skill.name} 上传失败:`, e?.response?.data?.message || e)
+      }
+    }
+  }
+
+  preUploadUploading.value = false
+  preUploadDialog.value = false
+  showLocalUpload.value = false
+  selectedLocalFiles.value = []
+  pendingSkills.value = []
+
+  if (successCount > 0) {
+    toast.success(t('geneMarket.uploadBatchDone', { ok: successCount, fail: failCount }))
+  }
+  if (failCount > 0 && successCount === 0) {
+    localError.value = t('geneMarket.uploadBatchAllFailed')
+  }
+  await loadData()
 }
 
 // 分类列表：改读后端（管理员可编辑），加载失败回退默认八类
@@ -1224,42 +1352,55 @@ function goToGenome(id: string) {
     </div>
   </div>
 
-  <!-- 上传成功后的分类编辑弹层（三步流第二步） -->
+  <!-- 上传前逐技能分类弹层（选完文件夹/ZIP → 每个技能独立选分类 → 确认上传） -->
   <Teleport to="body">
     <Transition name="fade">
       <div
-        v-if="categoryDialog"
+        v-if="preUploadDialog"
         class="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center"
-        @click.self="categoryDialog = false"
+        @click.self="!preUploadUploading && (preUploadDialog = false)"
       >
-        <div class="bg-white border border-gray-200 rounded-2xl shadow-xl w-80 p-5 space-y-4">
-          <h3 class="text-sm font-semibold text-gray-800">{{ t('geneMarket.categoryDialogTitle') }}</h3>
-          <div v-if="categoryDialogGene" class="space-y-3">
-            <p class="text-xs text-gray-500 truncate">{{ categoryDialogGene.name }}</p>
-            <div class="space-y-1.5">
-              <label class="text-xs font-medium text-gray-700">{{ t('geneMarket.categoryLabel') }}</label>
-              <select
-                v-model="categoryDialogGene.category"
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-              >
-                <option value="">{{ t('geneMarket.categorySkip') }}</option>
-                <option v-for="c in uploadCategoryOptions" :key="c.value" :value="c.value">{{ c.label }}</option>
-              </select>
+        <div class="bg-white border border-gray-200 rounded-2xl shadow-xl w-[28rem] max-h-[80vh] flex flex-col p-5 space-y-4">
+          <h3 class="text-sm font-semibold text-gray-800 shrink-0">
+            {{ t('geneMarket.preUploadTitle', { count: pendingSkills.length }) }}
+          </h3>
+          <div class="flex-1 overflow-y-auto space-y-3">
+            <div
+              v-for="(skill, i) in pendingSkills"
+              :key="i"
+              class="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2"
+            >
+              <div class="flex items-center gap-2">
+                <Package class="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                <span class="text-xs font-medium text-gray-700 flex-1 truncate">{{ skill.name }}</span>
+                <span class="text-[10px] text-gray-400">{{ skill.files.length }} 文件</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <select
+                  v-model="skill.category"
+                  class="flex-1 px-2 py-1.5 rounded-lg border border-gray-300 bg-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                >
+                  <option value="">{{ t('geneMarket.categorySkip') }}</option>
+                  <option v-for="c in uploadCategoryOptions" :key="c.value" :value="c.value">{{ c.label }}</option>
+                </select>
+              </div>
             </div>
           </div>
-          <div class="flex gap-2 justify-end">
+          <div class="flex gap-2 justify-end shrink-0">
             <button
               class="px-3 py-1.5 rounded-lg border border-gray-300 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-              @click="categoryDialog = false"
+              :disabled="preUploadUploading"
+              @click="preUploadDialog = false"
             >
               {{ t('common.cancel') }}
             </button>
             <button
               class="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
-              :disabled="categorySaving"
-              @click="saveCategoryFromDialog"
+              :disabled="preUploadUploading"
+              @click="confirmPreUpload"
             >
-              {{ t('common.save') }}
+              <span v-if="preUploadUploading" class="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full mr-1" />
+              {{ preUploadUploading ? t('geneMarket.uploading') : t('geneMarket.confirmUpload') }}
             </button>
           </div>
         </div>
