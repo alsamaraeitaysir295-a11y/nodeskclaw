@@ -52,6 +52,7 @@ from app.api.invitations import invite_router, invite_public_router
 from app.api.org_join_requests import router as org_join_request_router
 from app.api.org_leave_requests import router as org_leave_request_router
 from app.api.portal.instances import router as portal_instance_router
+from app.api.portal.instance_chat import router as portal_instance_chat_router
 from app.api.portal.instance_members import router as portal_instance_members_router
 from app.api.portal.deploy import router as portal_deploy_router
 from app.api.portal.channel_configs import router as portal_channel_config_router
@@ -63,6 +64,7 @@ from app.api.portal.automation_tasks import router as automation_task_router
 from app.api.knowledge_bases import router as kb_router
 from app.api.agent_knowledge import router as agent_knowledge_router
 from app.api.external_agents import router as external_agent_router
+from app.api.missions import router as mission_router
 
 # ── Portal 公共 API（/api/v1）──────────────────────────────
 # Portal 使用 portal/ 下的独立路由，内置实例级权限检查。
@@ -134,6 +136,7 @@ api_router.include_router(portal_cluster_write_router, prefix="/clusters", tags=
 api_router.include_router(portal_deploy_router, prefix="/deploy", tags=["部署"])
 api_router.include_router(portal_events_router, prefix="/events", tags=["事件"])
 api_router.include_router(portal_instance_router, prefix="/instances", tags=["实例"])
+api_router.include_router(portal_instance_chat_router, prefix="/instances", tags=["实例"])
 api_router.include_router(portal_instance_members_router, prefix="/instances", tags=["实例成员"])
 api_router.include_router(portal_channel_config_router, prefix="/instances", tags=["Channel 配置"])
 api_router.include_router(portal_mcp_router, prefix="/instances", tags=["MCP"])
@@ -161,6 +164,7 @@ api_router.include_router(instance_template_router, tags=["AI 员工模板"])
 # 后续补丁），不能依赖挂载位置提供保护——新增 "/admin/..." 路由时必须
 # 同样加这行，否则又会绕过权限校验。
 api_router.include_router(gene_router, tags=["基因进化"])
+api_router.include_router(mission_router, tags=["任务空间"])
 api_router.include_router(engine_router, prefix="/engines", tags=["工作引擎"])
 api_router.include_router(engine_version_read_router, prefix="/engine-versions", tags=["引擎版本"])
 api_router.include_router(engine_version_write_router, prefix="/engine-versions", tags=["引擎版本"],
