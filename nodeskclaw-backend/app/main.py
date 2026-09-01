@@ -710,6 +710,10 @@ async def lifespan(app: FastAPI):
         _heartbeat_task = asyncio.create_task(run_heartbeat_scanner(async_session_factory))
         logger.info("Runtime v2: SSE 心跳扫描已启动")
 
+        # 任务空间调度器（设计 docs/mission-space-p1-design.md §6）：DB 驱动 CAS，多副本安全
+        from app.services.mission.scheduler import start_mission_scheduler
+        start_mission_scheduler(async_session_factory)
+
         from app.services.runtime.messaging.queue_consumer import start_consumer
         _queue_consumer_task = start_consumer(async_session_factory)
         logger.info("Runtime v2: 队列消费者已启动")
@@ -856,6 +860,9 @@ async def lifespan(app: FastAPI):
 
         if _heartbeat_task and not _heartbeat_task.done():
             _heartbeat_task.cancel()
+
+        from app.services.mission.scheduler import stop_mission_scheduler
+        stop_mission_scheduler()
         if _pg_notify_service:
             try:
                 await _pg_notify_service.shutdown()
