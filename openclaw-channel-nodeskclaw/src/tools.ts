@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { AnyAgentTool } from "openclaw/plugin-sdk";
 import { isProtocolDowngraded } from "./tunnel-client.js";
+import { MISSION_TOOL_FACTORIES } from "./mission.js";
 
 type ToolConfig = {
   apiUrl: string;
@@ -23,6 +24,10 @@ export const NODESKCLAW_TOOL_NAMES = [
   "nodeskclaw_shared_files",
   "nodeskclaw_knowledge_search",
   "nodeskclaw_write_file",
+  "mission_report",
+  "mission_submit_artifact",
+  "mission_block",
+  "mission_complete",
 ] as const;
 
 function resolveToolConfig(config: OpenClawConfig, sessionWorkspaceId?: string): ToolConfig {
@@ -1085,5 +1090,7 @@ export function createNoDeskClawTools(config: OpenClawConfig, sessionWorkspaceId
     createChatHistoryTool(cfg),
     createSharedFilesTool(cfg),
     createKnowledgeSearchTool(cfg),
+    // 任务空间工具（设计 §7.3）：无进行中任务时 execute 返回 no active mission task
+    ...MISSION_TOOL_FACTORIES.map((factory) => factory()),
   ];
 }

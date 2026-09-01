@@ -182,10 +182,17 @@ class TunnelAdapter:
         self._stats = {"total_connections": 0, "total_messages_in": 0, "total_messages_out": 0}
         self._ws_context_cache: dict[str, _WorkspaceContext] = {}
         self._instance_streams: dict[str, dict[str, asyncio.Queue[TunnelMessage]]] = {}
+        # 任务空间版本协商（设计 §7.4）：auth 握手上报 supported_protocols 含
+        # "mission.v1" 的实例才走 mission.task.dispatch，未上报视为 legacy 走 chat.request
+        self._mission_capable: set[str] = set()
 
     @property
     def connected_instances(self) -> set[str]:
         return set(self._connections.keys())
+
+    @property
+    def mission_capable_instances(self) -> set[str]:
+        return set(self._mission_capable)
 
     def get_connection(self, instance_id: str) -> WebSocket | None:
         conn = self._connections.get(instance_id)
@@ -233,6 +240,12 @@ class TunnelAdapter:
             ))
             await ws.close(code=4004, reason="invalid_token")
             return
+
+        # 任务空间版本协商：握手载荷上报 supported_protocols（设计 §7.4）
+        supported = auth_msg.payload.get("supported_protocols")
+        if isinstance(supported, list) and "mission.v1" in supported:
+            self._mission_capable.add(instance_id)
+            logger.info("Tunnel: instance %s supports mission.v1", instance_id)
 
         old_conn = self._connections.get(instance_id)
         surviving_streams: dict[str, asyncio.Queue[TunnelMessage]] = {}
@@ -384,6 +397,25 @@ class TunnelAdapter:
             return True
         except Exception:
             return False
+
+    async def send_mission_dispatch(
+        self, instance_id: str, task_id: str, task_package: dict,
+    ) -> None:
+        """任务空间任务包下发（设计 §7.1，仅 mission.v1 实例会收到）。"""
+        conn = self._connections.get(instance_id)
+        if not conn:
+            raise ConnectionError(f"Instance {instance_id} not connected via tunnel")
+        await self._send(conn.ws, TunnelMessage(
+            type=TunnelMessageType.MISSION_TASK_DISPATCH,
+            payload={
+                "task_id": task_id,
+                "protocol_version": 1,
+                "data": task_package,
+            },
+        ))
+        logger.info(
+            "Tunnel: mission dispatch sent to %s, task_id=%s", instance_id, task_id,
+        )
 
     # ── TransportAdapter protocol ────────────────────────────
 
@@ -1006,6 +1038,7 @@ class TunnelAdapter:
         conn = self._connections.pop(instance_id, None)
         if conn:
             conn.cancel_all()
+        self._mission_capable.discard(instance_id)
         task = self._ping_tasks.pop(instance_id, None)
         if task and not task.done():
             task.cancel()

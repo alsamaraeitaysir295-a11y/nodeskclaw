@@ -18,6 +18,9 @@ class TunnelMessageType(str, Enum):
     LEARNING_TASK = "learning.task"
     PING = "ping"
     CONFIG_PUSH = "config.push"
+    # 任务空间下行（设计 docs/mission-space-p1-design.md §7.1）；
+    # 插件在 auth 握手上报 supported_protocols 含 "mission.v1" 才会收到此类型
+    MISSION_TASK_DISPATCH = "mission.task.dispatch"
 
     # Instance -> Backend
     AUTH = "auth"

@@ -1072,6 +1072,8 @@ PLUGIN_FILES = [
     "src/runtime.ts",
     "src/types.ts",
     "src/tunnel-client.ts",
+    # 任务空间协议模块（channel.ts/tools.ts import 它，漏发会导致员工插件整体加载失败、隧道掉线）
+    "src/mission.ts",
     "src/tools.ts",
 ]
 
@@ -2068,29 +2070,21 @@ async def startup_plugin_sync(db: AsyncSession) -> dict:
 
     Called as a background task during backend startup.
     Only updates files — does NOT restart instances.
+    注意（双模式需求 2026-09-01）：不再按 WorkspaceAgent 过滤——不进空间的
+    独立员工同样需要通道插件（否则隧道永远连不上、无法直聊）。
     """
-    from app.models.workspace_agent import WorkspaceAgent
-
-    wa_result = await db.execute(
-        select(WorkspaceAgent.instance_id)
-        .where(WorkspaceAgent.deleted_at.is_(None))
-        .distinct()
-    )
-    instance_ids_with_workspace = {r.instance_id for r in wa_result.all()}
-
-    if not instance_ids_with_workspace:
-        logger.info("startup_plugin_sync: 无 WorkspaceAgent 记录，跳过")
-        return {"updated": 0, "skipped": 0, "failed": 0}
-
     inst_result = await db.execute(
         select(Instance).where(
-            Instance.id.in_(instance_ids_with_workspace),
             Instance.deleted_at.is_(None),
             Instance.runtime == "openclaw",
             Instance.status == "running",
         )
     )
     instances = list(inst_result.scalars().all())
+
+    if not instances:
+        logger.info("startup_plugin_sync: 无运行中的 OpenClaw 实例，跳过")
+        return {"updated": 0, "skipped": 0, "failed": 0}
 
     updated_count = 0
     skipped_count = 0

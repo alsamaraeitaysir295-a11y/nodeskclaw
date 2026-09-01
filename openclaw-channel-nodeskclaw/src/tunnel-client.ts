@@ -16,6 +16,10 @@ interface TunnelMessage {
 }
 
 type LearningWebhookHandler = (body: unknown) => { ok: boolean };
+type MissionDispatchHandler = (
+  payload: unknown,
+  opts?: { token?: string; model?: string },
+) => Promise<void>;
 
 export interface TunnelCallbacks {
   onAuthOk?: () => void;
@@ -138,6 +142,7 @@ export class TunnelClient {
   private closed = false;
   private _protocolDowngraded = false;
   private learningHandler: LearningWebhookHandler | null = null;
+  private missionHandler: MissionDispatchHandler | null = null;
   private sendBuffer: TunnelMessage[] = [];
 
   get downgraded(): boolean {
@@ -154,6 +159,10 @@ export class TunnelClient {
 
   setLearningHandler(handler: LearningWebhookHandler): void {
     this.learningHandler = handler;
+  }
+
+  setMissionHandler(handler: MissionDispatchHandler): void {
+    this.missionHandler = handler;
   }
 
   connect(): void {
@@ -175,7 +184,13 @@ export class TunnelClient {
       this.send({
         id: crypto.randomUUID(),
         type: "auth",
-        payload: { instance_id: this.instanceId, token: this.token },
+        // supported_protocols：任务空间版本协商（设计 §7.4），未上报的旧镜像
+        // 会被后端识别为 legacy，走 chat.request 降级链路
+        payload: {
+          instance_id: this.instanceId,
+          token: this.token,
+          supported_protocols: ["mission.v1"],
+        },
         ts: Date.now(),
       });
     });
@@ -316,6 +331,20 @@ export class TunnelClient {
 
       case "chat.cancel":
         console.log("[tunnel] Chat cancel received for:", msg.payload?.id);
+        break;
+
+      case "mission.task.dispatch":
+        if (this.missionHandler) {
+          // 本地 Gateway 调用需要实例 token（鉴权）与默认模型，随载荷一起注入
+          this.missionHandler(msg.payload, {
+            token: this.token,
+            model: this.defaultChatModel,
+          }).catch((err) =>
+            console.error("[tunnel] mission dispatch handler error:", err),
+          );
+        } else {
+          console.warn("[tunnel] No mission handler registered, ignoring dispatch");
+        }
         break;
 
       case "learning.task":

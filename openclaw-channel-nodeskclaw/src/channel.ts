@@ -5,6 +5,7 @@ import type {
   CollaborationPayload,
 } from "./types.js";
 import { getNoDeskClawRuntime } from "./runtime.js";
+import { handleMissionDispatch } from "./mission.js";
 import { getTunnelClient, startTunnelClient, isProtocolDowngraded } from "./tunnel-client.js";
 import type { TunnelCallbacks } from "./tunnel-client.js";
 
@@ -226,6 +227,9 @@ export const nodeskclawPlugin: ChannelPlugin<ResolvedNoDeskClawAccount> = {
       };
 
       const tunnelClient = startTunnelClient(ctx.cfg, callbacks);
+
+      // 任务空间 mission.task.dispatch 翻译（设计 §7/T7）
+      tunnelClient.setMissionHandler(handleMissionDispatch);
 
       try {
         const { handleWebhook } = require("openclaw-channel-learning/src/channel.js");
