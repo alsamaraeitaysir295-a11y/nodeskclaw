@@ -32,6 +32,8 @@ dependencies = [
     "boto3>=1.35.0",
     # Database migrations
     "alembic>=1.13.0",
+    # JSON Schema 校验（任务空间编排器拆解输出校验，设计 §4）
+    "jsonschema>=4.23.0",
 ]
 
 [dependency-groups]
