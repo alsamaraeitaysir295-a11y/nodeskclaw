@@ -1207,6 +1207,55 @@ async def publish_gene_to_market(
     return ApiResponse(data=result)
 
 
+@router.put("/genes/{gene_id}/metadata")
+async def update_own_gene_metadata(
+    gene_id: str,
+    req: UpdateGeneRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """上传者修改自己个人库基因的元数据（分类/描述/标签等）。
+
+    权限：仅 gene.created_by == 当前用户，或 org admin / 超管（与 delete_user_gene 同口径）。
+    不允许通过此端点改 visibility / review_status / is_published（提审走 publish-to-market）。
+    """
+    from app.core.exceptions import ForbiddenError
+    from app.services.gene_service import is_user_admin_of_org
+
+    gene = (await db.execute(
+        select(Gene).where(Gene.id == gene_id, not_deleted(Gene))
+    )).scalar_one_or_none()
+    if gene is None:
+        raise NotFoundError("基因不存在")
+
+    is_owner = gene.created_by == current_user.id
+    is_admin = gene.org_id and await is_user_admin_of_org(db, current_user.id, gene.org_id)
+    if not (is_owner or is_admin or current_user.is_super_admin):
+        raise ForbiddenError("仅上传者本人或管理员可修改", "errors.gene.not_owner")
+
+    # 只取安全字段：visibility/review/publish 相关字段忽略
+    safe_fields = {}
+    for field in ("category", "description", "short_description", "tags", "icon", "version", "name"):
+        val = getattr(req, field, None)
+        if val is not None:
+            safe_fields[field] = val
+    if safe_fields:
+        for k, v in safe_fields.items():
+            setattr(gene, k, v)
+        await db.commit()
+        await db.refresh(gene)
+
+    await hooks.emit(
+        "operation_audit", action="gene.metadata_updated",
+        target_type="gene", target_id=gene_id,
+        actor_id=current_user.id, org_id=current_user.current_org_id,
+    )
+    return ApiResponse(data={
+        "id": gene.id, "slug": gene.slug, "name": gene.name,
+        "category": gene.category, "tags": gene.tags,
+    })
+
+
 @router.delete("/genes/{gene_id}")
 async def delete_gene(
     gene_id: str,

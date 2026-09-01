@@ -2,8 +2,9 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Bot, Send, Loader2, AlertCircle, Plus, MessageSquare, Trash2, Paperclip, X, FileText, Folder, ChevronRight, Download, Zap, Check } from 'lucide-vue-next'
+import { ArrowLeft, Bot, Send, Loader2, AlertCircle, Plus, MessageSquare, Trash2, Paperclip, X, FileText, Folder, ChevronRight, Download, Zap, Check, FolderUp } from 'lucide-vue-next'
 import api from '@/services/api'
+import { skillApi } from '@/services/skills'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
@@ -307,6 +308,7 @@ const isTyping = ref(false)
 // 直聊与空间聊天两种模式通用（纯消息文本约定，无后端改动）
 const showSkillPicker = ref(false)
 const selectedSkills = ref<SkillItem[]>([])
+const skillKeyword = ref('')
 
 function toggleSkillPick(skill: SkillItem) {
   const idx = selectedSkills.value.findIndex((s) => s.skill_name === skill.skill_name)
@@ -512,8 +514,131 @@ async function loadSkills() {
   try {
     const res = await api.get(`/instances/${instanceId.value}/skills`)
     skills.value = (res.data.data || []) as SkillItem[]
+    await loadMarketSkills()
   } catch {
     // 技能加载失败不影响主流程
+  }
+}
+
+// ── 聊天中直接安装市场技能（需求 2026-09-01：选技能时也能添加）──
+interface MarketGene { slug: string; name: string; description?: string }
+const marketGenes = ref<MarketGene[]>([])
+const installingSlug = ref('')
+
+async function loadMarketSkills() {
+  try {
+    const res = await api.get('/genes', { params: { visibility: 'public', page: 1, page_size: 50 } })
+    marketGenes.value = (res.data?.data ?? []).map((g: Record<string, unknown>) => ({
+      slug: String(g.slug ?? ''),
+      name: String(g.name ?? g.slug ?? ''),
+      description: (g.short_description || g.description) as string | undefined,
+    })).filter((g: MarketGene) => g.slug)
+  } catch {
+    // 市场清单加载失败不影响主流程
+  }
+}
+
+/** 未安装的市场技能（排除已装的） */
+const notInstalledMarket = computed(() => {
+  const installed = new Set(skills.value.map((s) => s.skill_name))
+  return marketGenes.value.filter((g) => !installed.has(g.slug))
+})
+
+const filteredNotInstalled = computed(() => {
+  const q = skillKeyword.value.trim().toLowerCase()
+  if (!q) return notInstalledMarket.value.slice(0, 6)
+  return notInstalledMarket.value
+    .filter((g) => g.name.toLowerCase().includes(q) || g.slug.toLowerCase().includes(q))
+    .slice(0, 6)
+})
+
+/** 安装市场技能到当前实例并自动选中（复用实例基因安装端点） */
+async function installMarketGene(g: MarketGene) {
+  if (installingSlug.value) return
+  installingSlug.value = g.slug
+  try {
+    await api.post(`/instances/${instanceId.value}/genes/install`, { gene_slug: g.slug })
+    toast.success(t('instanceChat.skillInstalled', { name: g.name }))
+    await loadSkills() // 刷新已装清单（内部会重拉市场清单更新排除集）
+    // 自动选中新装的技能（loadSkills 后 skills 里应有它）
+    const ns = skills.value.find((s) => s.skill_name === g.slug)
+    if (ns) toggleSkillPick(ns)
+  } catch {
+    toast.error(t('instanceChat.skillInstallFailed'))
+  } finally {
+    installingSlug.value = ''
+  }
+}
+
+// ── 上传本地技能（三步流：上传 → 改分类 → 提交；权限把控走审核流）──
+const localSkillInput = ref<HTMLInputElement | null>(null)
+const uploadingSkill = ref(false)
+// 上传成功后的编辑弹层：单个技能 + 分类下拉
+const uploadedSkillDialog = ref(false)
+const uploadedSkill = ref<{ id: string; slug: string; name: string; category: string } | null>(null)
+const categoryOptions = ref<Array<{ id: string; name: string }>>([])
+
+async function loadCategoryOptions() {
+  if (categoryOptions.value.length > 0) return
+  try {
+    categoryOptions.value = await skillApi.getCategories()
+  } catch {
+    // 分类清单加载失败不阻塞：下拉为空时用户可跳过
+  }
+}
+
+function triggerLocalSkillUpload() {
+  void loadCategoryOptions()
+  localSkillInput.value?.click()
+}
+
+async function handleLocalSkillSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = input.files
+  if (!files || files.length === 0 || uploadingSkill.value) return
+  uploadingSkill.value = true
+  showSkillPicker.value = false
+  try {
+    // 第一步：上传到个人库（target 固定 personal，后端硬约束）
+    const created = await skillApi.uploadFolder(files, false, 'personal')
+    const c = created as unknown as { id?: string; slug?: string; name?: string; category?: string | null }
+    if (c?.id && c?.slug) {
+      uploadedSkill.value = { id: c.id, slug: c.slug, name: c.name || c.slug, category: c.category || '' }
+      uploadedSkillDialog.value = true // 第二步：弹层改分类
+    }
+  } catch (err) {
+    const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+    toast.error(msg || t('instanceChat.skillInstallFailed'))
+  } finally {
+    uploadingSkill.value = false
+    input.value = ''
+  }
+}
+
+/** 第三步：提交——保存分类 + 安装到当前员工 + 自动选中 */
+async function submitUploadedSkill() {
+  if (!uploadedSkill.value) return
+  uploadingSkill.value = true
+  try {
+    if (uploadedSkill.value.category) {
+      await api.put(`/genes/${uploadedSkill.value.id}/metadata`, {
+        category: uploadedSkill.value.category,
+      })
+    }
+    await api.post(`/instances/${instanceId.value}/genes/install`, {
+      gene_slug: uploadedSkill.value.slug,
+    })
+    toast.success(t('instanceChat.skillInstalled', { name: uploadedSkill.value.name }))
+    uploadedSkillDialog.value = false
+    await loadSkills()
+    const ns = skills.value.find((s) => s.skill_name === uploadedSkill.value!.slug)
+    if (ns) toggleSkillPick(ns)
+  } catch (err) {
+    const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+    toast.error(msg || t('instanceChat.skillInstallFailed'))
+  } finally {
+    uploadingSkill.value = false
+    uploadedSkill.value = null
   }
 }
 
@@ -838,14 +963,6 @@ onUnmounted(() => {
               <Plus v-else class="w-3.5 h-3.5" />
               {{ t('instanceChat.newSession') }}
             </button>
-            <!-- 直聊模式徽章：实例未加入任何空间 -->
-            <div
-              v-if="!workspace"
-              class="mt-2 flex items-center justify-center gap-1 text-[10px] text-primary/90 bg-primary/5 border border-primary/20 rounded-md py-1"
-            >
-              <Bot class="w-3 h-3" />
-              {{ t('instanceChat.directModeBadge') }}
-            </div>
           </div>
 
           <!-- 会话列表 -->
@@ -1112,8 +1229,17 @@ onUnmounted(() => {
                 </button>
                 <div
                   v-if="showSkillPicker"
-                  class="absolute bottom-11 left-0 z-20 w-64 max-h-64 overflow-y-auto rounded-xl border border-border bg-card shadow-lg p-1"
+                  class="absolute bottom-11 left-0 z-20 w-72 max-h-72 overflow-y-auto rounded-xl border border-border bg-card shadow-lg p-1"
                 >
+                  <div class="px-2 pt-1 pb-1.5">
+                    <input
+                      v-model="skillKeyword"
+                      type="text"
+                      :placeholder="t('instanceChat.skillSearch')"
+                      class="w-full px-2 py-1 text-xs rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/30"
+                      @keydown.stop
+                    />
+                  </div>
                   <div v-if="skills.length === 0" class="px-3 py-2 text-xs text-muted-foreground">
                     {{ t('instanceChat.noSkills') }}
                   </div>
@@ -1132,6 +1258,51 @@ onUnmounted(() => {
                     <Check v-if="selectedSkills.some((x) => x.skill_name === s.skill_name)"
                            class="w-3.5 h-3.5 text-primary shrink-0" />
                   </button>
+
+                  <!-- 从技能市场安装（聊天中直接添加，装完自动选中） -->
+                  <div v-if="filteredNotInstalled.length > 0" class="border-t border-border mt-1 pt-1">
+                    <div class="px-3 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                      {{ t('instanceChat.installFromMarket') }}
+                    </div>
+                    <button
+                      v-for="g in filteredNotInstalled"
+                      :key="g.slug"
+                      class="w-full text-left px-3 py-2 rounded-lg hover:bg-accent transition-colors flex items-center gap-2"
+                      :disabled="installingSlug !== ''"
+                      @click="installMarketGene(g)"
+                    >
+                      <Loader2 v-if="installingSlug === g.slug" class="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
+                      <Plus v-else class="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                      <span class="flex-1 min-w-0">
+                        <span class="block text-xs font-medium truncate">{{ g.name }}</span>
+                        <span v-if="g.description" class="block text-[10px] text-muted-foreground truncate">{{ g.description }}</span>
+                      </span>
+                    </button>
+                  </div>
+
+                  <!-- 上传本地技能（仅入个人库；组织/公共需走审核流，权限把控在后端硬约束） -->
+                  <div class="border-t border-border mt-1 pt-1">
+                    <input
+                      ref="localSkillInput"
+                      type="file"
+                      webkitdirectory
+                      multiple
+                      class="hidden"
+                      @change="handleLocalSkillSelect"
+                    />
+                    <button
+                      class="w-full text-left px-3 py-2 rounded-lg hover:bg-accent transition-colors flex items-center gap-2"
+                      :disabled="uploadingSkill"
+                      @click="triggerLocalSkillUpload"
+                    >
+                      <Loader2 v-if="uploadingSkill" class="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
+                      <FolderUp v-else class="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                      <span class="flex-1 min-w-0">
+                        <span class="block text-xs font-medium">{{ t('instanceChat.uploadLocalSkill') }}</span>
+                        <span class="block text-[10px] text-muted-foreground">{{ t('instanceChat.uploadLocalSkillHint') }}</span>
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1319,6 +1490,55 @@ onUnmounted(() => {
           class="fixed inset-0 bg-black/30 z-[55]"
           @click="closeFilePreview"
         />
+      </Transition>
+    </Teleport>
+
+    <!-- 上传技能三步流：第二步（改分类）→ 第三步（提交） -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div
+          v-if="uploadedSkillDialog"
+          class="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center"
+          @click.self="uploadedSkillDialog = false"
+        >
+          <div class="bg-card border border-border rounded-2xl shadow-xl w-80 p-5 space-y-4">
+            <div class="flex items-center gap-2">
+              <FolderUp class="w-4 h-4 text-primary" />
+              <h3 class="text-sm font-semibold">{{ t('instanceChat.uploadedSkillTitle') }}</h3>
+            </div>
+            <div v-if="uploadedSkill" class="space-y-3">
+              <div class="text-xs text-muted-foreground truncate">
+                {{ t('instanceChat.uploadedSkillName') }}：{{ uploadedSkill.name }}
+              </div>
+              <div class="space-y-1.5">
+                <label class="text-xs font-medium">{{ t('instanceChat.skillCategory') }}</label>
+                <select
+                  v-model="uploadedSkill.category"
+                  class="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/30"
+                >
+                  <option value="">{{ t('instanceChat.skillCategoryEmpty') }}</option>
+                  <option v-for="c in categoryOptions" :key="c.id" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="flex gap-2 justify-end">
+              <button
+                class="px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-accent transition-colors"
+                @click="uploadedSkillDialog = false"
+              >
+                {{ t('common.cancel') }}
+              </button>
+              <button
+                class="px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                :disabled="uploadingSkill"
+                @click="submitUploadedSkill"
+              >
+                <Loader2 v-if="uploadingSkill" class="w-3 h-3 animate-spin inline mr-1" />
+                {{ t('instanceChat.submitSkill') }}
+              </button>
+            </div>
+          </div>
+        </div>
       </Transition>
     </Teleport>
   </div>

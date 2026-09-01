@@ -42,6 +42,7 @@ import { useAuthStore } from '@/stores/auth'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
 import { skillApi } from '@/services/skills'
+import api from '@/services/api'
 import type { MarketStats, MarketStatsRankItem } from '@/services/skills'
 import { suggestNextPatch } from '@/utils/semver'
 import { iconColorClass } from '@/utils/skillIconColor'
@@ -98,30 +99,19 @@ function validateUploadFiles(files: FileList): string | null {
 /** 上传核心：分类校验 + 提交 + 409 同名冲突的确认/版本号重试流程。
  * 文件夹上传与 ZIP 包上传共用（displayName 用于冲突确认弹窗里的名字展示） */
 async function doUpload(fileList: FileList | File[], displayName: string) {
-  // 分类必选：市场分类筛选/展示依赖该字段
-  if (!uploadCategory.value) {
-    localError.value = t('geneMarket.categoryRequired')
-    return
-  }
+  // 三步流（2026-09-01）：上传不带分类 → 成功后弹层改分类 → 提交保存（与聊天直传一致）
   localUploading.value = true
   localError.value = null
   localSuccess.value = null
   const input = fileList as FileList
   try {
-    // 直接上传只能进入个人 library（后端已无条件拒绝 org/public target），无需再按目标分流文案
-    const created = await skillApi.uploadFolder(input, false, 'personal', undefined, uploadCategory.value)
-    localSuccess.value = '已上传到个人技能 library'
-    // 带技能名的成功提示（后端返回的基因名为准，取不到回退目录/包名）
-    toast.success(t('geneMarket.uploadedToPersonal', { name: created?.name || displayName }))
-    showLocalUpload.value = false
-    selectedLocalFiles.value = []
-    await loadData()
+    const created = await skillApi.uploadFolder(input, false, 'personal')
+    await afterUploadShowCategoryDialog(created, displayName)
   } catch (e: any) {
     // 409 冲突：同名基因已存在，提示用户确认覆盖并输入本次覆盖的版本号
     if (e?.response?.status === 409) {
       const msg = e?.response?.data?.message || ''
       if (msg.includes('已存在') || msg.includes('already exists')) {
-        // 已知局限：后端 409 响应暂未携带冲突基因的当前版本号，此处 fallback 到 1.0.0（详见任务计划文档）
         const existingVersion: string = e?.response?.data?.data?.version || '1.0.0'
         const suggested = suggestNextPatch(existingVersion)
         const ok = confirm(`${displayName} 基因已存在（当前版本 ${existingVersion}），是否覆盖原基因？`)
@@ -131,18 +121,10 @@ async function doUpload(fileList: FileList | File[], displayName: string) {
             localError.value = '已取消上传'
             return
           }
-          // 用户清空输入框后直接点确定时 inputVersion 是空字符串而非 null，
-          // 不能算取消上传；此时按建议版本号处理，避免空字符串被当作「不传版本」
-          // 悄悄回退到后端默认值 1.0.0，导致「版本倒退」报错
           const finalVersion = inputVersion.trim() || suggested
-          // 重新上传，携带覆盖参数与版本号
           try {
-            const overwritten = await skillApi.uploadFolder(input, true, 'personal', finalVersion, uploadCategory.value ?? undefined)
-            localSuccess.value = `基因已覆盖`
-            toast.success(t('geneMarket.uploadedToPersonal', { name: overwritten?.name || displayName }))
-            showLocalUpload.value = false
-            selectedLocalFiles.value = []
-            await loadData()
+            const overwritten = await skillApi.uploadFolder(input, true, 'personal', finalVersion)
+            await afterUploadShowCategoryDialog(overwritten, displayName)
           } catch (e2: any) {
             localError.value = e2?.response?.data?.message || '覆盖失败'
           }
@@ -241,8 +223,45 @@ async function saveCategories() {
   }
 }
 
-// ── 本地上传分类（必选） ──────────────────────────────
+// ── 本地上传分类（三步流：上传→弹层改分类→提交保存）──────────────────────
 const uploadCategory = ref<string | null>(null)
+// 上传成功后的分类编辑弹层
+const categoryDialog = ref(false)
+const categoryDialogGene = ref<{ id: string; name: string; category: string } | null>(null)
+const categorySaving = ref(false)
+
+async function afterUploadShowCategoryDialog(
+  created: unknown, displayName: string,
+) {
+  const c = created as { id?: string; name?: string; category?: string | null } | null
+  toast.success(t('geneMarket.uploadedToPersonal', { name: c?.name || displayName }))
+  showLocalUpload.value = false
+  selectedLocalFiles.value = []
+  await loadData()
+  if (c?.id) {
+    categoryDialogGene.value = { id: c.id, name: c.name || displayName, category: c.category || '' }
+    categoryDialog.value = true
+  }
+}
+
+async function saveCategoryFromDialog() {
+  if (!categoryDialogGene.value || categorySaving.value) return
+  categorySaving.value = true
+  try {
+    if (categoryDialogGene.value.category) {
+      await api.put(`/genes/${categoryDialogGene.value.id}/metadata`, {
+        category: categoryDialogGene.value.category,
+      })
+      toast.success(t('geneMarket.categorySaved'))
+    }
+    categoryDialog.value = false
+    await loadData()
+  } catch {
+    toast.error(t('geneMarket.categorySaveFailed'))
+  } finally {
+    categorySaving.value = false
+  }
+}
 
 // 视图 Tab 选项：技能 / AI员工 / 统计（本地上传不在左侧 tab 组，改为工具栏右侧操作按钮）
 const viewModeTabs: { value: 'genes' | 'templates' | 'stats'; key: string }[] = [
@@ -1000,10 +1019,9 @@ function goToGenome(id: string) {
                   最多 {{ MAX_UPLOAD_FILE_COUNT }} 个文件。
                 </p>
 
-                <!-- 分类选择（必选）：上传后技能市场的分类筛选/展示依赖该字段 -->
+                <!-- 分类在上传后弹层中修改（三步流：上传→改分类→提交） -->
                 <div class="flex items-center gap-2">
-                  <span class="text-xs text-gray-600 shrink-0">{{ t('geneMarket.categoryLabel') }}</span>
-                  <CustomSelect v-model="uploadCategory" :options="uploadCategoryOptions" />
+                  <span class="text-xs text-gray-500">{{ t('geneMarket.categoryAfterUpload') }}</span>
                   <button
                     v-if="isAdmin"
                     class="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 shrink-0"
@@ -1014,9 +1032,6 @@ function goToGenome(id: string) {
                     {{ t('geneMarket.manageCategories') }}
                   </button>
                 </div>
-                <p v-if="!uploadCategory" class="text-xs text-gray-400">
-                  {{ t('geneMarket.categoryRequired') }}
-                </p>
 
                 <input
                   ref="localFolderInputRef"
@@ -1208,4 +1223,47 @@ function goToGenome(id: string) {
         </div>
     </div>
   </div>
+
+  <!-- 上传成功后的分类编辑弹层（三步流第二步） -->
+  <Teleport to="body">
+    <Transition name="fade">
+      <div
+        v-if="categoryDialog"
+        class="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center"
+        @click.self="categoryDialog = false"
+      >
+        <div class="bg-white border border-gray-200 rounded-2xl shadow-xl w-80 p-5 space-y-4">
+          <h3 class="text-sm font-semibold text-gray-800">{{ t('geneMarket.categoryDialogTitle') }}</h3>
+          <div v-if="categoryDialogGene" class="space-y-3">
+            <p class="text-xs text-gray-500 truncate">{{ categoryDialogGene.name }}</p>
+            <div class="space-y-1.5">
+              <label class="text-xs font-medium text-gray-700">{{ t('geneMarket.categoryLabel') }}</label>
+              <select
+                v-model="categoryDialogGene.category"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+              >
+                <option value="">{{ t('geneMarket.categorySkip') }}</option>
+                <option v-for="c in uploadCategoryOptions" :key="c.value" :value="c.value">{{ c.label }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="flex gap-2 justify-end">
+            <button
+              class="px-3 py-1.5 rounded-lg border border-gray-300 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+              @click="categoryDialog = false"
+            >
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              class="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+              :disabled="categorySaving"
+              @click="saveCategoryFromDialog"
+            >
+              {{ t('common.save') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
