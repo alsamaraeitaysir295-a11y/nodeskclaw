@@ -348,7 +348,7 @@ const skillDirty = computed(() => skillContent.value !== skillOriginal.value)
 async function fetchSkills() {
   try {
     const res = await api.get(`/instances/${instanceId.value}/skills`)
-    skills.value = (res.data?.data ?? [])
+    const emerged = (res.data?.data ?? [])
       .filter((s: any) => s.type === 'emerged')
       .map((s: any) => ({
         skill_name: s.skill_name,
@@ -356,23 +356,42 @@ async function fetchSkills() {
         description: s.description || '',
         type: s.type,
       }))
+    // SOUL.md 始终作为第一个 tab（角色提示词，可直接编辑）
+    skills.value = [
+      { skill_name: '__SOUL__', name: t('instanceDetail.skillEditor.soulTab'), description: '', type: 'soul' },
+      ...emerged,
+    ]
     if (skills.value.length && !activeSkill.value) {
       activeSkill.value = skills.value[0].skill_name
       await fetchSkillContent(activeSkill.value)
     }
   } catch {
-    skills.value = []
+    // skills 接口失败也保证 SOUL.md tab 可用
+    skills.value = [
+      { skill_name: '__SOUL__', name: t('instanceDetail.skillEditor.soulTab'), description: '', type: 'soul' },
+    ]
+    if (!activeSkill.value) {
+      activeSkill.value = '__SOUL__'
+      await fetchSkillContent('__SOUL__')
+    }
   }
 }
 
 async function fetchSkillContent(name: string) {
   skillLoading.value = true
   try {
-    const res = await api.get(`/instances/${instanceId.value}/skills/${name}/content`)
-    skillContent.value = res.data?.data?.content ?? ''
+    if (name === '__SOUL__') {
+      // SOUL.md 走实例文件接口（路径相对于 .openclaw/，完整路径 .openclaw/workspace/SOUL.md）
+      const res = await api.get(`/instances/${instanceId.value}/files/content`, {
+        params: { path: 'workspace/SOUL.md' },
+      })
+      skillContent.value = res.data?.data?.content ?? ''
+    } else {
+      const res = await api.get(`/instances/${instanceId.value}/skills/${name}/content`)
+      skillContent.value = res.data?.data?.content ?? ''
+    }
     skillOriginal.value = skillContent.value
   } catch {
-    toast.error(t('instanceDetail.skillEditor.loadFailed'))
     skillContent.value = ''
     skillOriginal.value = ''
   } finally {
@@ -390,9 +409,16 @@ async function saveSkillContent() {
   if (!activeSkill.value || skillSaving.value) return
   skillSaving.value = true
   try {
-    await api.put(`/instances/${instanceId.value}/skills/${activeSkill.value}/content`, {
-      content: skillContent.value,
-    })
+    if (activeSkill.value === '__SOUL__') {
+      await api.put(`/instances/${instanceId.value}/files/content`, {
+        path: 'workspace/SOUL.md',
+        content: skillContent.value,
+      })
+    } else {
+      await api.put(`/instances/${instanceId.value}/skills/${activeSkill.value}/content`, {
+        content: skillContent.value,
+      })
+    }
     skillOriginal.value = skillContent.value
     toast.success(t('instanceDetail.skillEditor.saved'))
   } catch {
@@ -649,10 +675,7 @@ function toggleSkillEditor() {
         </button>
 
         <div v-if="skillEditorOpen" class="border-t border-border">
-          <div v-if="!skills.length && !skillLoading" class="px-4 py-8 text-center text-sm text-muted-foreground">
-            {{ t('instanceDetail.skillEditor.empty') }}
-          </div>
-          <template v-else>
+          <template v-if="skills.length">
             <div class="flex gap-1 px-4 pt-3 pb-0 overflow-x-auto">
               <button
                 v-for="s in skills"
