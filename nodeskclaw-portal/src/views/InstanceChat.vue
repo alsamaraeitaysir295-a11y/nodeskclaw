@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Bot, Send, Loader2, AlertCircle, Plus, MessageSquare, Trash2, Paperclip, X, FileText, Folder, ChevronRight, Download } from 'lucide-vue-next'
+import { ArrowLeft, Bot, Send, Loader2, AlertCircle, Plus, MessageSquare, Trash2, Paperclip, X, FileText, Folder, ChevronRight, Download, Zap, Check } from 'lucide-vue-next'
 import api from '@/services/api'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAuthStore } from '@/stores/auth'
@@ -302,6 +302,31 @@ function toggleFilesPanel() {
 // 当 agent:typing 到达但尚未收到第一个 chunk 时显示
 const isTyping = ref(false)
 
+// ── 技能选择（与附件并列的显式技能指定，需求 2026-09-01）──
+// 发送时在消息前注入指令：要求员工先 read 对应 SKILL.md 再按说明执行，
+// 直聊与空间聊天两种模式通用（纯消息文本约定，无后端改动）
+const showSkillPicker = ref(false)
+const selectedSkills = ref<SkillItem[]>([])
+
+function toggleSkillPick(skill: SkillItem) {
+  const idx = selectedSkills.value.findIndex((s) => s.skill_name === skill.skill_name)
+  if (idx >= 0) selectedSkills.value.splice(idx, 1)
+  else selectedSkills.value.push(skill)
+  showSkillPicker.value = false
+}
+
+function removeSelectedSkill(idx: number) {
+  selectedSkills.value.splice(idx, 1)
+}
+
+function buildSkillDirective(): string {
+  if (selectedSkills.value.length === 0) return ''
+  const names = selectedSkills.value
+    .map((s) => `「${s.name || s.skill_name}」(.openclaw/skills/${s.skill_name}/SKILL.md)`)
+    .join('、')
+  return `[技能指定] 本次请求请使用技能 ${names}：先 read 对应 SKILL.md，严格按其说明执行后再回答。\n`
+}
+
 // ── 技能列表 ─────────────────────────────────
 interface SkillItem {
   skill_name: string
@@ -380,36 +405,49 @@ async function findWorkspace() {
   }
 }
 
-// 加载该 AI 员工的历史会话列表
+// 加载该 AI 员工的历史会话列表（双模式：入空间走空间会话，未入空间走实例直聊会话）
 async function loadSessions() {
-  if (!workspace.value) return
+  if (!workspace.value && !instanceId.value) return
   sessionsLoading.value = true
   try {
-    const list = await store.fetchInstanceConversations(workspace.value.id, instanceId.value)
+    let list: { id: string; last_message_at?: string | null }[]
+    if (workspace.value) {
+      list = await store.fetchInstanceConversations(workspace.value.id, instanceId.value)
+    } else {
+      const res = await api.get(`/instances/${instanceId.value}/conversations`)
+      list = res.data?.data ?? []
+    }
     // 按最近消息时间降序，置顶有消息的会话
-    sessions.value = list.sort((a, b) => {
+    const sorted = [...list].sort((a, b) => {
       if (!a.last_message_at && !b.last_message_at) return 0
       if (!a.last_message_at) return 1
       if (!b.last_message_at) return -1
       return new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
     })
+    sessions.value = sorted as Conversation[]
   } finally {
     sessionsLoading.value = false
   }
 }
 
-// 创建新会话
+// 创建新会话（直聊模式走实例维度端点）
 async function createNewSession() {
-  if (!workspace.value || creatingSession.value) return
+  if ((!workspace.value && !instanceId.value) || creatingSession.value) return
   creatingSession.value = true
   try {
-    const userId = authStore.user?.id || ''
-    const index = sessions.value.length + 1
-    const name = t('instanceChat.sessionTitle', { index })
-    const conv = await store.createConversation(workspace.value.id, name, [
-      instanceId.value,
-      userId,
-    ])
+    let conv: Conversation
+    if (workspace.value) {
+      const userId = authStore.user?.id || ''
+      const index = sessions.value.length + 1
+      const name = t('instanceChat.sessionTitle', { index })
+      conv = await store.createConversation(workspace.value.id, name, [
+        instanceId.value,
+        userId,
+      ])
+    } else {
+      const res = await api.post(`/instances/${instanceId.value}/conversations`)
+      conv = res.data?.data as Conversation
+    }
     sessions.value.unshift(conv)
     await switchSession(conv.id)
   } finally {
@@ -417,13 +455,14 @@ async function createNewSession() {
   }
 }
 
-// 删除会话
+// 删除会话（直聊模式 P1 仅本地移除——实例维度删除端点未开放）
 async function deleteSession(sessionId: string) {
-  if (!workspace.value) return
-  try {
-    await api.delete(`/workspaces/${workspace.value.id}/conversations/${sessionId}`)
-  } catch {
-    // 删除失败也从本地列表移除，保持 UI 一致
+  if (workspace.value) {
+    try {
+      await api.delete(`/workspaces/${workspace.value.id}/conversations/${sessionId}`)
+    } catch {
+      // 删除失败也从本地列表移除，保持 UI 一致
+    }
   }
   const idx = sessions.value.findIndex((s) => s.id === sessionId)
   if (idx !== -1) sessions.value.splice(idx, 1)
@@ -449,13 +488,19 @@ async function switchSession(sessionId: string) {
   await loadSessionMessages()
 }
 
-// 加载当前会话的消息
+// 加载当前会话的消息（直聊模式走实例维度端点）
 async function loadSessionMessages() {
-  if (!workspace.value || !activeSessionId.value) return
+  if (!activeSessionId.value) return
   messagesLoading.value = true
   try {
-    const msgs = await store.fetchConversationMessages(workspace.value.id, activeSessionId.value)
-    messages.value = msgs as ChatMsg[]
+    let msgs: ChatMsg[]
+    if (workspace.value) {
+      msgs = await store.fetchConversationMessages(workspace.value.id, activeSessionId.value) as ChatMsg[]
+    } else {
+      const res = await api.get(`/instances/${instanceId.value}/conversations/${activeSessionId.value}/messages`)
+      msgs = res.data?.data ?? []
+    }
+    messages.value = msgs
     await scrollToBottom()
   } finally {
     messagesLoading.value = false
@@ -489,11 +534,17 @@ function relativeTime(iso: string | null): string {
 // SSE 事件回调（仅保留系统事件，消息流已改用直连）
 function onSSEEvent(_event: string, _data: Record<string, unknown>) {}
 
-// 发送消息：调用私人对话直连端点，流式读取响应
+// 发送消息：调用私人对话直连端点，流式读取响应（双模式：空间端点 / 实例直聊端点）
 async function sendMessage() {
-  if ((!inputText.value.trim() && pendingFiles.value.length === 0) || sending.value || fileUploading.value || !workspace.value || !activeSessionId.value) return
+  if ((!inputText.value.trim() && pendingFiles.value.length === 0) || sending.value || fileUploading.value || !activeSessionId.value) return
 
-  const text = inputText.value.trim()
+  const directMode = !workspace.value
+  let text = inputText.value.trim()
+  const skillDirective = buildSkillDirective()
+  if (skillDirective) {
+    text = skillDirective + (text ? '\n' + text : '')
+    selectedSkills.value = []
+  }
   inputText.value = ''
   sending.value = true
   isTyping.value = true
@@ -506,14 +557,29 @@ async function sendMessage() {
     const filesToUpload = [...pendingFiles.value]
     pendingFiles.value = []
     try {
-      const uploaded: FileAttachment[] = []
-      for (const f of filesToUpload) {
-        const result = await store.uploadFile(workspace.value.id, f)
-        if (result) uploaded.push(result)
-      }
-      if (uploaded.length > 0) {
-        fileIds = uploaded.map((u) => u.id)
-        attachments = uploaded
+      if (directMode) {
+        // 直聊模式：上传到实例内 workspace/attachments/，消息以路径引用（员工 read 读取）
+        const paths: string[] = []
+        for (const f of filesToUpload) {
+          const safeName = f.name.replace(/[^\w.\-一-龥]/g, '_')
+          const path = `workspace/attachments/${Date.now()}-${safeName}`
+          const content = await f.text()
+          await api.put(`/instances/${instanceId.value}/files/content`, { path, content })
+          paths.push(`${f.name}（${path}）`)
+        }
+        if (paths.length > 0) {
+          text = (text ? text + '\n' : '') + '[附件] ' + paths.join('；')
+        }
+      } else {
+        const uploaded: FileAttachment[] = []
+        for (const f of filesToUpload) {
+          const result = await store.uploadFile(workspace.value!.id, f)
+          if (result) uploaded.push(result)
+        }
+        if (uploaded.length > 0) {
+          fileIds = uploaded.map((u) => u.id)
+          attachments = uploaded
+        }
       }
     } catch {
       toast.error(t('chat.fileUploadFailed'))
@@ -555,7 +621,9 @@ async function sendMessage() {
   try {
     const token = localStorage.getItem('portal_token') || ''
     const response = await fetch(
-      `/api/v1/workspaces/${workspace.value.id}/agents/${instanceId.value}/chat`,
+      directMode
+        ? `/api/v1/instances/${instanceId.value}/chat`
+        : `/api/v1/workspaces/${workspace.value!.id}/agents/${instanceId.value}/chat`,
       {
         method: 'POST',
         headers: {
@@ -565,7 +633,7 @@ async function sendMessage() {
         body: JSON.stringify({
           message: text,
           conversation_id: activeSessionId.value,
-          file_ids: fileIds,
+          ...(directMode ? {} : { file_ids: fileIds }),
         }),
       },
     )
@@ -717,15 +785,14 @@ onMounted(async () => {
   await loadInstance()
   await findWorkspace()
 
-  if (workspace.value) {
-    await Promise.all([loadSessions(), loadSkills()])
+  // 双模式：入空间走空间会话；未入空间自动进入直聊模式（不再拦截）
+  await Promise.all([loadSessions(), loadSkills()])
 
-    if (sessions.value.length > 0) {
-      activeSessionId.value = sessions.value[0].id
-      await loadSessionMessages()
-    } else {
-      await createNewSession()
-    }
+  if (sessions.value.length > 0) {
+    activeSessionId.value = sessions.value[0].id
+    await loadSessionMessages()
+  } else {
+    await createNewSession()
   }
 })
 
@@ -753,22 +820,7 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 未加入工作空间提示 -->
-    <div v-else-if="!workspace" class="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-      <div class="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center">
-        <Bot class="w-7 h-7 text-primary" />
-      </div>
-      <h3 class="font-semibold">{{ t('instanceChat.noWorkspaceTitle') }}</h3>
-      <p class="text-sm text-muted-foreground max-w-sm">
-        {{ t('instanceChat.noWorkspaceDesc') }}
-      </p>
-      <button
-        class="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
-        @click="router.push('/')"
-      >
-        {{ t('instanceChat.goToWorkspaces') }}
-      </button>
-    </div>
+    <!-- 未加入空间时不再拦截：自动进入直聊模式（AI 员工双模式需求） -->
 
     <!-- 主对话区域：左侧会话面板 + 右侧消息区 -->
     <div v-else class="flex-1 flex overflow-hidden">
@@ -786,6 +838,14 @@ onUnmounted(() => {
               <Plus v-else class="w-3.5 h-3.5" />
               {{ t('instanceChat.newSession') }}
             </button>
+            <!-- 直聊模式徽章：实例未加入任何空间 -->
+            <div
+              v-if="!workspace"
+              class="mt-2 flex items-center justify-center gap-1 text-[10px] text-primary/90 bg-primary/5 border border-primary/20 rounded-md py-1"
+            >
+              <Bot class="w-3 h-3" />
+              {{ t('instanceChat.directModeBadge') }}
+            </div>
           </div>
 
           <!-- 会话列表 -->
@@ -808,8 +868,9 @@ onUnmounted(() => {
                 />
                 <div class="flex items-center justify-between gap-1 pl-1">
                   <span class="text-xs font-medium truncate flex-1">{{ session.name }}</span>
-                  <!-- 删除按钮：hover 时显示，带背景色与侧边栏区分 -->
+                  <!-- 删除按钮：hover 时显示（直聊模式 P1 未开放删除端点，隐藏） -->
                   <button
+                    v-if="workspace"
                     class="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded text-white hover:text-destructive transition-all"
                     @click.stop="deleteSession(session.id)"
                   >
@@ -955,6 +1016,21 @@ onUnmounted(() => {
 
           <!-- 输入区域 -->
           <div class="shrink-0 border-t border-border bg-card px-4 pt-2 pb-3" @dragover="handleDragOver" @drop="handleDrop">
+            <!-- 已选技能标签（随消息发送，可移除） -->
+            <div v-if="selectedSkills.length > 0" class="flex flex-wrap gap-2 mb-2">
+              <span
+                v-for="(s, i) in selectedSkills"
+                :key="s.skill_name"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs border border-primary/20"
+              >
+                <Zap class="w-3 h-3" />
+                {{ s.name || s.skill_name }}
+                <button class="hover:text-destructive" @click="removeSelectedSkill(i)">
+                  <X class="w-3 h-3" />
+                </button>
+              </span>
+            </div>
+
             <!-- 待发送文件预览 -->
             <div v-if="pendingFiles.length > 0" class="flex flex-wrap gap-2 mb-2">
               <div
@@ -1021,6 +1097,43 @@ onUnmounted(() => {
                   <Paperclip class="w-4 h-4" />
                 </button>
               </BaseTooltip>
+
+              <!-- 选择技能：与附件并列（发送时注入技能执行指令） -->
+              <div class="relative shrink-0">
+                <button
+                  class="w-9 h-9 rounded-xl flex items-center justify-center transition-colors"
+                  :class="selectedSkills.length > 0
+                    ? 'text-primary bg-primary/10'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'"
+                  :title="t('instanceChat.pickSkill')"
+                  @click="showSkillPicker = !showSkillPicker"
+                >
+                  <Zap class="w-4 h-4" />
+                </button>
+                <div
+                  v-if="showSkillPicker"
+                  class="absolute bottom-11 left-0 z-20 w-64 max-h-64 overflow-y-auto rounded-xl border border-border bg-card shadow-lg p-1"
+                >
+                  <div v-if="skills.length === 0" class="px-3 py-2 text-xs text-muted-foreground">
+                    {{ t('instanceChat.noSkills') }}
+                  </div>
+                  <button
+                    v-for="s in skills"
+                    :key="s.skill_name"
+                    class="w-full text-left px-3 py-2 rounded-lg hover:bg-accent transition-colors flex items-center gap-2"
+                    @click="toggleSkillPick(s)"
+                  >
+                    <Zap class="w-3.5 h-3.5 shrink-0"
+                         :class="selectedSkills.some((x) => x.skill_name === s.skill_name) ? 'text-primary' : 'text-muted-foreground'" />
+                    <span class="flex-1 min-w-0">
+                      <span class="block text-xs font-medium truncate">{{ s.name || s.skill_name }}</span>
+                      <span v-if="s.description" class="block text-[10px] text-muted-foreground truncate">{{ s.description }}</span>
+                    </span>
+                    <Check v-if="selectedSkills.some((x) => x.skill_name === s.skill_name)"
+                           class="w-3.5 h-3.5 text-primary shrink-0" />
+                  </button>
+                </div>
+              </div>
 
               <textarea
                 ref="textareaRef"

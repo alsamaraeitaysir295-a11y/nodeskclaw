@@ -41,6 +41,43 @@ const slugConflict = ref(false)
 const slugError = ref('')
 const description = ref('')
 const selectedSpec = ref('small')
+
+// ── 初始技能多选（需求 2026-09-01：创建时引导装技能，创建后随部署自动安装）──
+const skillKeyword = ref('')
+const selectedSkills = ref<Array<{ slug: string; name: string }>>([])
+const marketSkills = ref<Array<{ slug: string; name: string; description?: string; category?: string }>>([])
+
+const filteredMarketSkills = computed(() => {
+  const q = skillKeyword.value.trim().toLowerCase()
+  if (!q) return marketSkills.value.slice(0, 12)
+  return marketSkills.value
+    .filter((s) =>
+      s.name.toLowerCase().includes(q)
+      || s.slug.toLowerCase().includes(q)
+      || (s.description || '').toLowerCase().includes(q),
+    )
+    .slice(0, 12)
+})
+
+function toggleMarketSkill(s: { slug: string; name: string }) {
+  const idx = selectedSkills.value.findIndex((x) => x.slug === s.slug)
+  if (idx >= 0) selectedSkills.value.splice(idx, 1)
+  else selectedSkills.value.push({ slug: s.slug, name: s.name })
+}
+
+async function loadMarketSkills() {
+  try {
+    const res = await api.get('/genes', { params: { visibility: 'public', page: 1, page_size: 100 } })
+    marketSkills.value = (res.data?.data ?? []).map((g: Record<string, unknown>) => ({
+      slug: String(g.slug ?? ''),
+      name: String(g.name ?? g.slug ?? ''),
+      description: (g.short_description || g.description) as string | undefined,
+      category: g.category as string | undefined,
+    })).filter((s: { slug: string }) => s.slug)
+  } catch {
+    // 技能清单加载失败不阻塞创建流程
+  }
+}
 const selectedImage = ref('')
 const storageGi = ref(20)
 const deploying = ref(false)
@@ -432,6 +469,7 @@ watch(selectedCluster, (id) => {
 
 onMounted(async () => {
   try {
+    loadMarketSkills()
     const orgId = authStore.user?.current_org_id
     const fetches: Promise<any>[] = [
       api.get('/clusters'),
@@ -608,6 +646,9 @@ async function handleDeploy() {
       description: description.value || undefined,
       llm_configs: activeLlm.length > 0 ? activeLlm : undefined,
       template_id: selectedTemplate.value?.id || undefined,
+      install_gene_slugs: selectedSkills.value.length > 0
+        ? selectedSkills.value.map((s) => s.slug)
+        : undefined,
     })
 
     const deployId = res.data.data?.deploy_id
@@ -904,6 +945,53 @@ async function handleDeploy() {
                 <span>{{ spec.cpu }} {{ t('orgSettings.specsCpuUnit') }}</span>
                 <span>{{ spec.memory }} GB</span>
               </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- 初始技能（可选）：创建后随部署自动安装；组织必备技能自动装无需选 -->
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <label class="text-sm font-medium">{{ t('createInstance.skillSectionTitle') }}</label>
+            <span class="text-[11px] text-muted-foreground">{{ t('createInstance.skillAutoRequired') }}</span>
+          </div>
+          <input
+            v-model="skillKeyword"
+            type="text"
+            :placeholder="t('createInstance.skillSearchPlaceholder')"
+            class="w-full px-3 py-2 rounded-xl border border-border bg-card text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+          <div v-if="selectedSkills.length > 0" class="flex flex-wrap gap-2">
+            <span
+              v-for="(s, i) in selectedSkills"
+              :key="s.slug"
+              class="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-primary/10 text-primary text-xs border border-primary/20"
+            >
+              <Zap class="w-3 h-3" />
+              {{ s.name }}
+              <button class="hover:text-destructive" @click="selectedSkills.splice(i, 1)">
+                <X class="w-3 h-3" />
+              </button>
+            </span>
+          </div>
+          <div v-if="filteredMarketSkills.length === 0" class="text-xs text-muted-foreground py-2">
+            {{ t('createInstance.noSkills') }}
+          </div>
+          <div v-else class="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-52 overflow-y-auto">
+            <button
+              v-for="s in filteredMarketSkills"
+              :key="s.slug"
+              :class="[
+                'p-3 rounded-xl border text-left transition-all',
+                selectedSkills.some((x) => x.slug === s.slug)
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                  : 'border-border bg-card hover:border-primary/20',
+              ]"
+              @click="toggleMarketSkill(s)"
+            >
+              <div class="text-sm font-medium truncate">{{ s.name }}</div>
+              <div v-if="s.description" class="text-xs text-muted-foreground truncate mt-0.5">{{ s.description }}</div>
+              <div v-if="s.category" class="text-[10px] text-muted-foreground/70 mt-1">{{ s.category }}</div>
             </button>
           </div>
         </div>
