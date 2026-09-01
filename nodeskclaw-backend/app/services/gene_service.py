@@ -4278,3 +4278,24 @@ async def delete_skill_by_name(
     _fire_task(_restart_instance_bg(instance_id))
     logger.info("delete_skill_by_name: skill=%s instance=%s", skill_name, instance_id)
     return {"deleted": True, "skill_name": skill_name}
+
+
+async def get_org_required_gene_slugs(db: AsyncSession, org_id: str | None) -> list[str]:
+    """组织的必备基因 slug 清单（OrgRequiredGene join 未删除基因）。
+
+    AI 员工双模式需求 2026-08-31：创建实例时即安装必备基因（原为加入空间时才补装）。
+    """
+    from app.models.org_required_gene import OrgRequiredGene
+
+    if not org_id:
+        return []
+    rows = (await db.execute(
+        select(Gene.slug).join(
+            OrgRequiredGene, OrgRequiredGene.gene_id == Gene.id,
+        ).where(
+            OrgRequiredGene.org_id == org_id,
+            not_deleted(OrgRequiredGene),
+            not_deleted(Gene),
+        )
+    )).scalars().all()
+    return list(dict.fromkeys(rows))

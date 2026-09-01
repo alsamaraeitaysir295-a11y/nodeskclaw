@@ -28,6 +28,9 @@ class DeployRequest(BaseModel):
     advanced_config: dict | None = None  # Volume/Sidecar/Init/Network
     llm_configs: list[LlmConfigItem] | None = None
     template_id: str | None = None
+    # 创建表单内用户显式勾选的初始技能（需求 2026-09-01：创建时引导装技能，
+    # 与模板基因/组织必备基因三源并集安装）
+    install_gene_slugs: list[str] | None = None
     runtime: str = "openclaw"
 
     @field_validator("storage_size")

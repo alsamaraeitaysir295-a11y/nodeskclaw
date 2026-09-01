@@ -412,6 +412,10 @@ class _DeployContext:
     should_sync_runtime_llm_config: bool = False
     template_id: str | None = None
     template_gene_slugs: list[str] | None = None
+    # 组织必备基因（AI 员工双模式需求：创建时即装，原为加入空间时才补装）
+    required_gene_slugs: list[str] | None = None
+    # 用户在创建表单内显式勾选的初始技能
+    install_gene_slugs: list[str] | None = None
     compute_provider: str = "k8s"
     runtime: str = "openclaw"
     pvc_access_mode: str | None = None
@@ -625,6 +629,9 @@ async def deploy_instance(
     if req.template_id:
         from app.services.instance_template_service import get_template_gene_slugs
         template_gene_slugs = await get_template_gene_slugs(db, req.template_id, org_id)
+    # 组织必备基因：创建时即安装（不依赖是否加入空间）
+    from app.services.gene_service import get_org_required_gene_slugs
+    required_gene_slugs = await get_org_required_gene_slugs(db, org_id)
 
     # 创建部署记录
     max_rev = await db.execute(
@@ -672,6 +679,8 @@ async def deploy_instance(
         should_sync_runtime_llm_config=should_sync_runtime_llm_config,
         template_id=req.template_id,
         template_gene_slugs=template_gene_slugs,
+        required_gene_slugs=required_gene_slugs,
+        install_gene_slugs=req.install_gene_slugs,
         compute_provider=instance.compute_provider,
         runtime=instance.runtime,
         pvc_access_mode=req.pvc_access_mode,
@@ -696,7 +705,7 @@ async def execute_deploy_pipeline(ctx: _DeployContext) -> None:
     steps = list(DEPLOY_STEPS_BASE)
     if ctx.should_sync_runtime_llm_config:
         steps.append("应用实例配置")
-    if ctx.template_gene_slugs:
+    if ctx.template_gene_slugs or ctx.required_gene_slugs or ctx.install_gene_slugs:
         steps.append("安装模板技能基因")
     total = len(steps)
 
@@ -852,7 +861,7 @@ async def _execute_via_compute_provider(ctx: _DeployContext) -> None:
             )
         )
         record = rec_result.scalar_one()
-        record.status = DeployStatus.success
+        # 部署记录标记成功放在最终就绪后（见下方 instance running 赋值处）
         record.finished_at = datetime.now(timezone.utc)
 
         inst_result = await db.execute(
@@ -868,6 +877,11 @@ async def _execute_via_compute_provider(ctx: _DeployContext) -> None:
             adv = _json.loads(instance.advanced_config) if instance.advanced_config else {}
             adv["compose_path"] = result.extra["compose_path"]
             instance.advanced_config = _json.dumps(adv)
+
+        # 到位判定（需求 2026-09-01：员工未就绪前不显示运行中）：容器就绪仅是第一步，
+        # 还需通道插件推送 + 基因安装 + 重启完成。此处先保持 deploying，
+        # 待下方全部就绪步骤结束后再置 running。
+        instance.status = InstanceStatus.deploying
 
         await db.commit()
 
@@ -890,6 +904,67 @@ async def _execute_via_compute_provider(ctx: _DeployContext) -> None:
                     exc_info=True,
                 )
 
+        # ── 推送通道插件（必须在基因安装前：随后的重启会加载新推的插件文件）──
+        await _ensure_channel_plugins(ctx)
+
+        # ── Docker 路径安装基因（模板 ∪ 组织必备）──
+        # 此前 Docker/compute-provider 路径连模板基因都不装（K8s 路径独有），
+        # 双模式需求收口：两条创建路径行为对齐
+        _docker_gene_slugs = list(dict.fromkeys([
+            *(ctx.template_gene_slugs or []),
+            *(ctx.required_gene_slugs or []),
+            *(ctx.install_gene_slugs or []),
+        ]))
+        if _docker_gene_slugs:
+            from app.services.gene_service import install_gene_prerestart
+            _docker_failed: list[str] = []
+            for idx, gene_slug in enumerate(_docker_gene_slugs):
+                installed = False
+                for attempt in range(3):
+                    try:
+                        await install_gene_prerestart(ctx.instance_id, gene_slug)
+                        installed = True
+                        break
+                    except Exception as ge:
+                        logger.warning(
+                            "Docker 路径基因安装失败（第 %d 次）: slug=%s err=%s",
+                            attempt + 1, gene_slug, ge,
+                        )
+                        await asyncio.sleep(2)
+                if not installed:
+                    _docker_failed.append(gene_slug)
+                if installed and idx < len(_docker_gene_slugs) - 1:
+                    await asyncio.sleep(1)
+            if len(_docker_failed) < len(_docker_gene_slugs):
+                try:
+                    from app.services.instance_service import restart_instance
+                    await restart_instance(ctx.instance_id, db)
+                except Exception as restart_err:
+                    logger.warning("Docker 路径基因安装后重启失败: %s", restart_err)
+            if _docker_failed:
+                logger.warning(
+                    "Docker 路径基因安装部分失败: instance=%s failed=%s",
+                    ctx.instance_id, _docker_failed,
+                )
+
+        # 全部就绪步骤（插件/配置/基因/重启）完成后才标记成功+运行中
+        async with async_session_factory() as db:
+            fin_rec = (await db.execute(
+                select(DeployRecord).where(
+                    DeployRecord.id == ctx.record_id,
+                    DeployRecord.deleted_at.is_(None),
+                )
+            )).scalar_one()
+            fin_rec.status = DeployStatus.success
+            fin_inst = (await db.execute(
+                select(Instance).where(
+                    Instance.id == ctx.instance_id,
+                    Instance.deleted_at.is_(None),
+                )
+            )).scalar_one()
+            fin_inst.status = InstanceStatus.running
+            await db.commit()
+
     event_bus.publish(
         "deploy_progress",
         DeployProgress(
@@ -898,6 +973,50 @@ async def _execute_via_compute_provider(ctx: _DeployContext) -> None:
             message="部署成功", percent=100,
         ).model_dump(),
     )
+
+
+async def _ensure_channel_plugins(ctx: _DeployContext) -> bool:
+    """部署就绪后向新实例推送通道插件文件（镜像不带插件，历史靠后端重启时同步——
+    新建实例会漏，双模式下不进空间的独立员工永远拿不到，遂前移到部署管道）。
+
+    返回是否有文件更新（调用方据此决定是否需要重启网关加载插件）。
+    """
+    from app.core.deps import async_session_factory
+    from app.services.llm_config_service import _sync_stale_plugins
+    from app.services.nfs_mount import remote_fs
+
+    try:
+        async with async_session_factory() as db:
+            inst = await db.get(Instance, ctx.instance_id)
+            if inst is None:
+                return False
+            async with remote_fs(inst, db) as fs:
+                updated = await _sync_stale_plugins(fs, inst)
+                # 通道账户配置：镜像 entrypoint 生成的 openclaw.json 没有
+                # channels.nodeskclaw（ensure_gateway_config 见文件已存在会跳过），
+                # 不写则插件无 instanceId/apiToken 可用、隧道永远不起
+                from app.services.llm_config_service import (
+                    _inject_channel_config,
+                    _read_config_file,
+                    _write_config_file,
+                )
+                try:
+                    config = await _read_config_file(fs)
+                    _inject_channel_config(config, inst, workspace_id="default")
+                    await _write_config_file(fs, config)
+                except Exception as ce:
+                    logger.warning(
+                        "部署管道写入通道账户配置失败: instance=%s err=%s", ctx.instance_id, ce,
+                    )
+                if updated:
+                    logger.info("部署管道已推送通道插件: instance=%s", ctx.instance_id)
+                return bool(updated)
+    except Exception as e:
+        logger.warning(
+            "部署管道推送通道插件失败（非致命，后端重启时会补同步）: instance=%s err=%s",
+            ctx.instance_id, e,
+        )
+        return False
 
 
 async def _mark_deploy_failed(ctx: _DeployContext, message: str) -> None:
@@ -1266,14 +1385,23 @@ async def _execute_deploy_inner(ctx, async_session_factory, get_config, total, s
                             _publish(config_step, "应用实例配置", status="failed",
                                      message=str(e)[:200])
 
+                # 推送通道插件（先于基因安装：装完基因的重启会加载新推的插件）
+                await _ensure_channel_plugins(ctx)
+
                 gene_install_warning = ""
-                if ctx.template_gene_slugs:
+                # 模板基因 ∪ 组织必备基因 ∪ 用户所选技能（三源并集，创建即装）
+                _gene_slugs_all = list(dict.fromkeys([
+                    *(ctx.template_gene_slugs or []),
+                    *(ctx.required_gene_slugs or []),
+                    *(ctx.install_gene_slugs or []),
+                ]))
+                if _gene_slugs_all:
                     gene_step = len(steps)
                     _publish(gene_step, "安装模板技能基因")
                     failed_genes: list[str] = []
                     max_retries = 2
                     from app.services.gene_service import install_gene_prerestart
-                    for idx, gene_slug in enumerate(ctx.template_gene_slugs):
+                    for idx, gene_slug in enumerate(_gene_slugs_all):
                         installed = False
                         for attempt in range(max_retries + 1):
                             try:
@@ -1293,10 +1421,10 @@ async def _execute_deploy_inner(ctx, async_session_factory, get_config, total, s
                                         max_retries, gene_slug, ge,
                                     )
                                     failed_genes.append(gene_slug)
-                        if installed and idx < len(ctx.template_gene_slugs) - 1:
+                        if installed and idx < len(_gene_slugs_all) - 1:
                             await asyncio.sleep(1)
 
-                    installed_count = len(ctx.template_gene_slugs) - len(failed_genes)
+                    installed_count = len(_gene_slugs_all) - len(failed_genes)
                     if installed_count > 0:
                         try:
                             from app.services.instance_service import restart_instance
@@ -1307,7 +1435,7 @@ async def _execute_deploy_inner(ctx, async_session_factory, get_config, total, s
                     if failed_genes:
                         gene_install_warning = f"（{len(failed_genes)} 个基因安装失败: {', '.join(failed_genes)}）"
                         _publish(gene_step, "安装模板技能基因", status="success",
-                                 message=f"{len(ctx.template_gene_slugs) - len(failed_genes)}/{len(ctx.template_gene_slugs)} 安装成功")
+                                 message=f"{len(_gene_slugs_all) - len(failed_genes)}/{len(_gene_slugs_all)} 安装成功")
                     else:
                         _publish(gene_step, "安装模板技能基因", status="success")
 
