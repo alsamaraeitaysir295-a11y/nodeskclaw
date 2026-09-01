@@ -10,9 +10,10 @@ from app.models.base import BaseModel
 class WorkspaceMessage(BaseModel):
     __tablename__ = "workspace_messages"
 
-    workspace_id: Mapped[str] = mapped_column(
+    # NULL = 实例维度直聊消息（会话无空间归属，见 Conversation.workspace_id 注释）
+    workspace_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False, index=True,
+        nullable=True, index=True,
     )
     sender_type: Mapped[str] = mapped_column(String(16), nullable=False)
     sender_id: Mapped[str] = mapped_column(String(36), nullable=False)

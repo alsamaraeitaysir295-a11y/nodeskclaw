@@ -21,10 +21,12 @@ class Conversation(BaseModel):
         ),
     )
 
-    workspace_id: Mapped[str] = mapped_column(
+    # 空间维度会话；NULL = 实例维度直聊会话（不入空间的单智能体私聊，
+    # AI 员工双模式需求 2026-08-31：不进空间可直用 / 进空间供编排）
+    workspace_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("workspaces.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
