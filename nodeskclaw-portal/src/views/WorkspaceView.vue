@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Settings, Maximize2, Minimize2, ZoomIn, ZoomOut, RotateCcw, RefreshCw, MessageSquare, Plus, Keyboard, ChevronDown, X, Bot, ListChecks, AlertTriangle, Wifi, User, Users, MapPin, Focus, Minimize } from 'lucide-vue-next'
+import { ArrowLeft, Settings, Maximize2, Minimize2, ZoomIn, ZoomOut, RotateCcw, RefreshCw, MessageSquare, Plus, Keyboard, ChevronDown, X, Bot, ListChecks, AlertTriangle, Wifi, User, Users, MapPin, Focus, Minimize, FlaskConical } from 'lucide-vue-next'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAuthStore } from '@/stores/auth'
 import { useViewTransition } from '@/composables/useViewTransition'
@@ -906,6 +906,17 @@ function handleKeydown(e: KeyboardEvent) {
           <Plus class="w-3.5 h-3.5" />
           <span class="hidden xl:inline">{{ t('workspaceView.addAgent') }}</span>
         </button>
+
+        <!-- 任务实验室纯导航入口（任务空间 P1，设计 D11：现有页面唯一允许的改动，
+             不调用任何新接口、不动现有组件逻辑） -->
+        <router-link
+          :to="{ name: 'MissionLab', query: ws ? { ws: ws.id } : {} }"
+          class="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border text-xs text-muted-foreground transition-colors hover:text-foreground hover:border-foreground/30"
+          :title="t('missions.navButton')"
+        >
+          <FlaskConical class="w-3.5 h-3.5" />
+          <span class="hidden xl:inline">{{ t('missions.navButton') }}</span>
+        </router-link>
 
         <div class="w-px h-5 bg-border" />
 

@@ -126,6 +126,12 @@ const ceRoutes: RouteRecordRaw[] = [
     component: () => import('@/views/GeneMarket.vue'),
   },
   {
+    // 任务实验室（Mission P1 验证页，设计 docs/mission-space-p1-design.md §10）
+    path: '/mission-lab',
+    name: 'MissionLab',
+    component: () => import('@/views/MissionLab.vue'),
+  },
+  {
     path: '/gene-market/gene/:slug',
     name: 'GeneDetail',
     component: () => import('@/views/GeneDetail.vue'),
