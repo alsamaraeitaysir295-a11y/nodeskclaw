@@ -30,6 +30,11 @@ def _fire_task(coro: Coroutine) -> asyncio.Task:
 
 async def handle_collaboration_event(instance_id: str, payload: dict) -> None:
     """Entry point for tunnel-originated collaboration messages."""
+    # 任务空间 mission.* 上行消息（设计 §7.2）走独立 ingest，不进协作消息管线
+    if str(payload.get("type", "")).startswith("mission."):
+        from app.services.mission.ingest_service import handle_mission_message
+        await handle_mission_message(instance_id, payload)
+        return
     await handle_collaboration_message(
         workspace_id=payload.get("workspace_id", ""),
         source_instance_id=payload.get("source_instance_id", instance_id),
