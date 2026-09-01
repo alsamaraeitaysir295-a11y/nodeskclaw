@@ -122,6 +122,10 @@ def build_gene_manifest(tpl: dict) -> dict:
     }
     if "skill" in inner:
         manifest["skill"] = inner["skill"]
+    # 能力标签（任务空间匹配器数据源，设计 docs/mission-space-p1-design.md §5/T4a）：
+    # 白名单字段必须与模板源同步，否则标注到不了 GeneHub
+    if "capabilities" in inner:
+        manifest["capabilities"] = inner["capabilities"]
     if "tool_allow" in inner:
         manifest["tool_allow"] = inner["tool_allow"]
     if "scripts" in inner:
