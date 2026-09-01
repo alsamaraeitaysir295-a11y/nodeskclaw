@@ -71,7 +71,7 @@ Docker Compose：`docker compose up -d`（CE）/ 加 `-f docker-compose.ee.yml`�
 - 部署脚本（`deploy/cli.sh`）必须用户手动执行，AI 禁止直接跑；破坏性操作（K8s 删除、DB DELETE、force push）必须逐项确认
 - 改动 ≥1 个独立功能点先进入 Plan 模式；Plan 中禁止用行号定位代码（并发编辑会失效），改用类/函数/文件
 - 每完成一个独立改动立即 commit，不攒批；多 Agent 协作时只 `git add` 本次改动文件，禁止 `git add -A/.`
-- 新建目录/子项目必须有 README；改代码要同步受影响文档（设计文档存 `ee/docs/`，CE 仓库不建 `docs/` 目录）
+- 新建目录/子项目必须有 README；改代码要同步受影响文档（设计文档存 `ee/docs/`）
 - 任何新功能先判断是否服务于"人和 AI 共同经营"这一产品定位，说不清价值就先质疑
 - Grep 搜不到不等于不存在：换更宽泛关键词重试确认后才能下结论
 - 排查问题必须端到端验证 + 分层用证据排查（前端→后端→K8s→镜像），不凭猜测/对话上下文下结论
