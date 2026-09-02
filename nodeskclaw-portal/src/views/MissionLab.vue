@@ -8,9 +8,10 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  ArrowLeft, CheckCircle2, CircleAlert, Clock, FlaskConical, Loader2,
-  Package, RefreshCw, Send, Star, XCircle,
+  ArrowLeft, CheckCircle2, CircleAlert, Clock, FlaskConical, GitBranch, List, Loader2,
+  Package, RefreshCw, Send, Star, XCircle, Zap,
 } from 'lucide-vue-next'
+import MissionDag from '@/components/mission/MissionDag.vue'
 import api from '@/services/api'
 import {
   missionApi,
@@ -78,6 +79,25 @@ const artifacts = ref<MissionArtifactItem[]>([])
 const openL2 = ref<MissionEventItem | null>(null)
 const answerText = ref('')
 const rejectMode = ref(false)
+// P2 DAG 可视化 + 优先级
+const nodeViewMode = ref<'dag' | 'list'>('dag')
+const selectedNodeId = ref<string | null>(null)
+const settingPriority = ref(false)
+
+function onDagNodeClick(nodeId: string) {
+  selectedNodeId.value = nodeId
+  nodeViewMode.value = 'list'
+}
+
+async function togglePriority() {
+  if (!detail.value || settingPriority.value) return
+  settingPriority.value = true
+  try {
+    const next = detail.value.priority === 1 ? 'normal' : 'urgent'
+    await missionApi.setPriority(detail.value.id, next)
+    await refreshDetail()
+  } finally { settingPriority.value = false }
+}
 const rejectReason = ref('')
 const rejectedNodes = ref<string[]>([])
 
@@ -333,6 +353,20 @@ void loadWorkspaces().then(() => loadMissions())
               </button>
               <button
                 v-if="['executing', 'blocked_question', 'awaiting_confirm'].includes(detail.status)"
+                :disabled="settingPriority"
+                class="flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs transition-colors"
+                :class="detail.priority === 1
+                  ? 'border-red-400/60 bg-red-500/10 text-red-500'
+                  : 'border-border text-muted-foreground hover:text-foreground'"
+                :title="t('missions.priorityToggle')"
+                @click="togglePriority"
+              >
+                <Loader2 v-if="settingPriority" class="w-3 h-3 animate-spin" />
+                <Zap v-else class="w-3 h-3" />
+                {{ detail.priority === 1 ? t('missions.priorityUrgent') : t('missions.priorityNormal') }}
+              </button>
+              <button
+                v-if="['executing', 'blocked_question', 'awaiting_confirm'].includes(detail.status)"
                 class="px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-muted"
                 @click="cancelMission"
               >
@@ -405,10 +439,37 @@ void loadWorkspaces().then(() => loadMissions())
             </div>
           </div>
 
-          <!-- 节点 -->
+          <!-- 节点（DAG 视图 / 列表视图 切换） -->
           <div class="mt-4">
-            <div class="text-xs font-semibold text-muted-foreground mb-2">{{ t('missions.nodesTitle') }}</div>
-            <div class="space-y-1.5">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xs font-semibold text-muted-foreground">{{ t('missions.nodesTitle') }}</span>
+              <div class="flex-1" />
+              <button
+                class="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border transition-colors"
+                :class="nodeViewMode === 'dag' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground'"
+                @click="nodeViewMode = 'dag'"
+              >
+                <GitBranch class="w-3 h-3" /> {{ t('missions.dagView') }}
+              </button>
+              <button
+                class="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border transition-colors"
+                :class="nodeViewMode === 'list' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground'"
+                @click="nodeViewMode = 'list'"
+              >
+                <List class="w-3 h-3" /> {{ t('missions.listView') }}
+              </button>
+            </div>
+
+            <!-- DAG 拓扑图 -->
+            <MissionDag
+              v-if="nodeViewMode === 'dag' && detail.nodes.length > 0"
+              :nodes="detail.nodes"
+              :selected-node-id="selectedNodeId"
+              @node-click="onDagNodeClick"
+            />
+
+            <!-- 列表视图 -->
+            <div v-if="nodeViewMode === 'list'" class="space-y-1.5">
               <div
                 v-for="n in detail.nodes"
                 :key="n.id"

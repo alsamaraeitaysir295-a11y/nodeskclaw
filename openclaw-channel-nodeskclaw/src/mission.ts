@@ -20,6 +20,7 @@ export interface MissionTaskPackage {
   mission_title: string;
   brief: { goal: string; constraints: string[]; acceptance_criteria: string[] };
   subtask: { title: string; description: string; acceptance_criteria: string };
+  upstream_conclusions?: Array<{ seq: number; title: string; summary: string }>;
   upstream_artifacts: Array<{ name: string; kind: string; storage_url: string }>;
   escalation_rules: { l2_rules: string[]; l1_hint: string };
   report_guidance: string;
@@ -82,6 +83,12 @@ export function buildTaskPrompt(pkg: MissionTaskPackage): string {
   }
   if (pkg.brief.acceptance_criteria?.length) {
     lines.push(`整体验收：${pkg.brief.acceptance_criteria.join("；")}`);
+  }
+  if (pkg.upstream_conclusions?.length) {
+    lines.push("上游结论（前序节点已完成的工作总结，直接参考不需重做）：");
+    for (const c of pkg.upstream_conclusions) {
+      lines.push(`  #${c.seq} ${c.title}：${c.summary}`);
+    }
   }
   if (pkg.upstream_artifacts?.length) {
     const arts = pkg.upstream_artifacts

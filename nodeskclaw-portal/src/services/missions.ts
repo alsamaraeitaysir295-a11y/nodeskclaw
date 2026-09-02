@@ -49,6 +49,7 @@ export interface MissionDetail {
   mission_type: string
   status: string
   created_by: string
+  priority?: number
   tokens: { cost: number; prompt: number; completion: number }
   nodes: MissionNodeItem[]
   coverage?: CoverageItem[]
@@ -127,6 +128,9 @@ export const missionApi = {
   },
   async promote(missionId: string, artifactId: string): Promise<void> {
     await api.post(`/missions/${missionId}/artifacts/${artifactId}/promote`)
+  },
+  async setPriority(missionId: string, level: 'normal' | 'urgent'): Promise<void> {
+    await api.post(`/missions/${missionId}/priority`, { level })
   },
   async accept(missionId: string): Promise<void> {
     await api.post(`/missions/${missionId}/accept`)
