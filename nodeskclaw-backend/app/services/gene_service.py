@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Coroutine
 from urllib.parse import urlencode
 
-from sqlalchemy import and_, func, not_, or_, select, text, update
+from sqlalchemy import and_, false, func, not_, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -626,6 +626,8 @@ async def _list_genes_local(
             ),
         )
     elif org_id:
+        # 市场视图（2026-09-02 产品调整）：只显示 public + org_private
+        # 个人技能在"管理本地技能"入口单独管理，不进市场列表
         base = base.where(
             or_(
                 and_(
@@ -688,11 +690,14 @@ async def list_genes(
     page_size: int = 20,
 ) -> tuple[list[dict], int]:
     # 个人 library 仅存在于本地 DB，不走聚合器（远程注册表没有个人数据）
-    if visibility == "personal":
+    # visibility=None（默认"全部"）也走本地：聚合器只搜 public+org，
+    # 看不到个人技能——本地分支已有三合一 + 同 slug 去重逻辑
+    if visibility == "personal" or visibility is None or visibility == "":
         return await _list_genes_local(
             db,
             keyword=keyword, tag=tag, category=category, source=source,
-            visibility=visibility, org_id=org_id, user_id=user_id,
+            visibility=visibility if visibility else None,
+            org_id=org_id, user_id=user_id,
             sort=sort, page=page, page_size=page_size,
         )
 

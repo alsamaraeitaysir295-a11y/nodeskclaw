@@ -27,7 +27,11 @@ import {
   Check,
   X,
   Upload,
+  Share2,
+  Building2,
+  Globe,
   FolderOpen,
+  FileArchive,
   AlertTriangle,
   Code2,
   Settings,
@@ -56,8 +60,8 @@ const { t } = useI18n()
 const viewMode = ref<'genes' | 'templates' | 'local' | 'stats'>('genes')
 const keyword = ref('')
 const selectedCategory = ref<string | null>(null)
-// 三栏归属过滤：默认进入「公共市场」；'personal' / 'org_private' / 'public'
-const selectedVisibility = ref<string>('public')
+// 三栏归属过滤：默认「全部」（后端 public + org + personal 去重）；可切 'personal' / 'org_private' / 'public'
+const selectedVisibility = ref<string>('')
 const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = ref(12)
@@ -76,6 +80,7 @@ const localFolderInputRef = ref<HTMLInputElement>()
 interface PendingSkill {
   name: string
   category: string
+  description: string  // SKILL.md 里解析出的描述（帮助用户选分类）
   files: File[]   // 属于该技能的文件子集
   zipFile?: File  // ZIP 上传时为原始 zip 文件
 }
@@ -153,18 +158,39 @@ async function doUpload(fileList: FileList | File[], displayName: string) {
   }
 }
 
-/** ZIP 包上传：选中 .zip 后识别技能并弹层逐个选分类 */
+/** ZIP 包上传：选中 .zip 后追加到待上传列表（弹层保持打开，可继续添加） */
+/** 从文件夹上传的文件集中解析 SKILL.md 的 YAML frontmatter 拿 description */
+async function parseSkillDescription(files: File[]): Promise<string> {
+  const skillMd = files.find((f) => baseName(f.name).toLowerCase() === 'skill.md')
+  if (!skillMd) return ''
+  try {
+    const text = await skillMd.text()
+    // YAML frontmatter 里的 description 字段（--- 包裹段内）
+    const m = text.match(/^---\s*\n([\s\S]*?)\n---/)
+    if (m) {
+      const descMatch = m[1].match(/^description:\s*(.+)$/m)
+      if (descMatch) return descMatch[1].trim().slice(0, 120)
+    }
+    // 没有 frontmatter 时取正文第一段非标题文字
+    const bodyLine = text.split('\n').find((l) => l.trim() && !l.startsWith('#') && !l.startsWith('---'))
+    return bodyLine ? bodyLine.trim().slice(0, 120) : ''
+  } catch {
+    return ''
+  }
+}
+
 async function handleLocalFile(file: File) {
   if (file.size > MAX_UPLOAD_TOTAL_SIZE) {
     localError.value = `ZIP 包超过大小限制（${MAX_UPLOAD_TOTAL_SIZE / (1024 * 1024)}MB）`
     return
   }
-  pendingSkills.value = [{
+  pendingSkills.value.push({
     name: file.name.replace(/\.zip$/i, ''),
     category: '',
+    description: '',  // ZIP 内容前端不解包，描述在上传后由后端解析
     files: [file],
     zipFile: file,
-  }]
+  })
   preUploadDialog.value = true
 }
 
@@ -185,13 +211,25 @@ async function handleLocalFolder() {
     localError.value = '未找到 SKILL.md 文件（请确认文件夹内包含技能定义）'
     return
   }
-  pendingSkills.value = groups.map((g) => ({
-    name: g.name,
-    category: '',
-    files: g.files,
-  }))
+  for (const g of groups) {
+    const desc = await parseSkillDescription(g.files)
+    pendingSkills.value.push({ name: g.name, category: '', description: desc, files: g.files })
+  }
   preUploadDialog.value = true
 }
+
+/** 从待上传列表移除某个技能 */
+function removePendingSkill(idx: number) {
+  pendingSkills.value.splice(idx, 1)
+  if (pendingSkills.value.length === 0) {
+    preUploadDialog.value = false
+  }
+}
+
+/** 校验：所有技能都选了分类才能提交 */
+const allCategoriesSelected = computed(() =>
+  pendingSkills.value.length > 0 && pendingSkills.value.every((s) => s.category !== ''),
+)
 
 // 轻量路径操作（避免引入 path 库，前端只需要 basename 和 dirname）
 function baseName(p: string): string {
@@ -247,9 +285,9 @@ function groupFilesBySkill(files: FileList): Array<{ name: string; files: File[]
 function onLocalFolderInput(e: Event) {
   const input = e.target as HTMLInputElement
   if (!input.files || input.files.length === 0) return
-  selectedLocalFiles.value = Array.from(input.files).map(
-    f => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
-  )
+  // 直接进入预上传弹层（跳过中间文件列表页）
+  void handleLocalFolder()
+  input.value = '' // 允许重复选择同一文件夹
 }
 
 /** 上传前弹层确认：逐技能上传（每个带各自分类） */
@@ -453,12 +491,59 @@ const uploadCategoryOptions = computed(() =>
   categories.value.map(c => ({ value: c, label: c })),
 )
 
-// 归属过滤下拉选项：value 与 selectedVisibility 的取值（public / org_private / personal）保持一致
+// 归属过滤（市场只显示公共+组织，个人在"管理本地技能"入口）
 const visibilitySelectOptions = computed(() => [
+  { value: '', label: t('geneMarket.scopeAll') },
   { value: 'public', label: t('geneMarket.scopePublic') },
   { value: 'org_private', label: t('geneMarket.scopeOrg') },
-  { value: 'personal', label: t('geneMarket.scopePersonal') },
 ])
+
+// ── 管理本地技能（个人技能列表 + 上传/下载/推送/删除）──
+const personalGenes = ref<Array<{ id: string; slug: string; name: string; icon?: string; category?: string | null; version?: string; short_description?: string; description?: string }>>([])
+const personalLoading = ref(false)
+
+async function loadPersonalGenes() {
+  personalLoading.value = true
+  try {
+    const res = await api.get('/genes', { params: { visibility: 'personal', page: 1, page_size: 100 } })
+    personalGenes.value = res.data?.data ?? []
+  } catch { /* 不阻塞 */ } finally { personalLoading.value = false }
+}
+
+async function downloadLocalGene(slug: string) {
+  try { await store.downloadGene(slug) } catch { /* toast handled in store */ }
+}
+
+async function pushLocalGene(gene: { id: string; slug: string; name: string }, target: 'org' | 'public') {
+  try {
+    const forked = await store.forkGene(gene.id, target)
+    if ((forked as any)?.kind === 'overwrite_submission') {
+      toast.success(t('geneMarket.forkOverwriteSubmitted'))
+    } else if (target === 'org') {
+      const isApproved = forked?.review_status === 'approved'
+      toast.success(isApproved ? t('geneMarket.forkToOrgImmediate') : t('geneMarket.forkToOrgSuccess'))
+    } else {
+      const isApproved = forked?.review_status === 'approved'
+      toast.success(isApproved ? t('geneMarket.forkToPublicImmediate') : t('geneMarket.forkToPublicSuccess'))
+    }
+  } catch (e: any) {
+    toast.error(e?.response?.data?.message || t('geneMarket.pushFailed'))
+  }
+}
+
+async function deleteLocalGene(geneId: string, name: string) {
+  if (!confirm(`确定删除「${name}」？此操作不可恢复。`)) return
+  try {
+    await skillApi.deleteGene(geneId)
+    toast.success(t('geneMarket.localSkillDeleted'))
+    await loadPersonalGenes()
+  } catch (e: any) {
+    toast.error(e?.response?.data?.message || t('geneMarket.localSkillDeleteFailed'))
+  }
+}
+
+// 切到本地技能视图时自动加载
+watch(viewMode, (v) => { if (v === 'local') loadPersonalGenes() })
 
 const sortSelectOptions = computed(() =>
   sortOptions.map(s => ({ value: s, label: getSortLabel(s) }))
@@ -500,8 +585,30 @@ const totalCount = computed(() => {
 })
 
 const totalPages = computed(() => Math.ceil(totalCount.value / pageSize.value) || 1)
-const canPrev = computed(() => page.value > 1)
-const canNext = computed(() => page.value < totalPages.value)
+const canLoadMore = computed(() => page.value < totalPages.value)
+
+/** 加载更多：追加下一页（不清空已有列表） */
+async function loadMore() {
+  if (!canLoadMore.value || store.loading) return
+  page.value += 1
+  // fetchGenes 替换列表；这里改为追加模式（store 里 genes 是全量替换的，
+  // 所以在组件层拼接：先记住已有长度，fetch 后把新页追加）
+  if (viewMode.value === 'genes') {
+    const existing = [...store.genes]
+    await store.fetchGenes({
+      keyword: keyword.value || undefined,
+      category: selectedCategory.value || undefined,
+      visibility: selectedVisibility.value || undefined,
+      sort: sortBy.value,
+      page: page.value,
+      page_size: pageSize.value,
+    })
+    // 追加而非替换：store 里 fetch 后 genes 被替换为当前页，把之前页拼回来
+    store.genes = [...existing, ...store.genes.filter(
+      (g) => !existing.some((e) => e.id === g.id),
+    )]
+  }
+}
 
 /**
  * 判断当前用户是否有权限删除某个 gene。
@@ -838,7 +945,7 @@ function goToGenome(id: string) {
           <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
         </div>
 
-        <!-- 本地上传：右侧操作按钮（筛选区隐藏时 ml-auto 兜底靠右） -->
+        <!-- 管理本地技能：右侧操作按钮 -->
         <button
           :class="[
             'ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors',
@@ -848,8 +955,8 @@ function goToGenome(id: string) {
           ]"
           @click="viewMode = 'local'"
         >
-          <Upload class="w-4 h-4" />
-          {{ t('geneMarket.tabLocal') }}
+          <FolderOpen class="w-4 h-4" />
+          {{ t('geneMarket.tabLocalSkills') }}
         </button>
       </div>
 
@@ -876,7 +983,7 @@ function goToGenome(id: string) {
                   <component :is="resolveIcon(gene.icon)" class="w-7 h-7 text-white" />
                 </div>
 
-                <!-- 中部：标题行（名称 + 分类胶囊，其余徽标/标签暂不展示）/ 描述 -->
+                <!-- 中部：标题行（名称 + 分类胶囊 + 个人库徽标）/ 描述 -->
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="font-semibold truncate">{{ gene.name }}</span>
@@ -885,6 +992,14 @@ function goToGenome(id: string) {
                       class="shrink-0 text-xs px-2 py-0.5 rounded bg-muted/70 text-muted-foreground"
                     >
                       {{ gene.category }}
+                    </span>
+                    <!-- 你个人库也有此技能（同 slug 副本） -->
+                    <span
+                      v-if="gene['has_personal_copy']"
+                      class="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20"
+                    >
+                      <Check class="w-3 h-3" />
+                      {{ t('geneMarket.inYourLibrary') }}
                     </span>
                   </div>
                   <p class="text-sm text-muted-foreground line-clamp-1 mt-1">
@@ -1133,33 +1248,74 @@ function goToGenome(id: string) {
 
           <!-- ═══ 本地上传 Tab ═══ -->
           <div v-if="viewMode === 'local'" class="space-y-6">
-            <div class="rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 p-8">
-              <div class="flex flex-col items-center gap-4">
-                <FolderOpen class="w-10 h-10 text-blue-400" />
-                <p class="text-sm text-gray-700 text-center font-medium">上传本地 SKILL 文件夹</p>
-                <p class="text-xs text-gray-500 text-center max-w-md">
-                  选择包含 <code class="bg-white px-1 rounded">SKILL.md</code> 的文件夹，系统自动解析并创建本地基因。
-                  同时支持上传 ZIP 包。
-                </p>
-                <p class="text-xs text-gray-400 text-center max-w-md">
-                  限制：单文件最大 {{ MAX_UPLOAD_FILE_SIZE / (1024 * 1024) }}MB，
-                  总大小最大 {{ MAX_UPLOAD_TOTAL_SIZE / (1024 * 1024) }}MB，
-                  最多 {{ MAX_UPLOAD_FILE_COUNT }} 个文件。
-                </p>
-
-                <!-- 分类在上传后弹层中修改（三步流：上传→改分类→提交） -->
-                <div class="flex items-center gap-2">
-                  <span class="text-xs text-gray-500">{{ t('geneMarket.categoryAfterUpload') }}</span>
-                  <button
-                    v-if="isAdmin"
-                    class="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 shrink-0"
-                    :title="t('geneMarket.manageCategories')"
-                    @click="openCategoryDialog"
+            <!-- 已有本地技能列表 -->
+            <div v-if="personalGenes.length > 0" class="rounded-xl border border-border bg-card overflow-hidden">
+              <div class="px-4 py-2.5 border-b border-border bg-muted/30 flex items-center gap-2">
+                <FolderOpen class="w-4 h-4 text-primary" />
+                <span class="text-sm font-semibold">{{ t('geneMarket.localSkillsTitle') }}（{{ personalGenes.length }}）</span>
+              </div>
+              <div class="divide-y divide-border">
+                <div
+                  v-for="gene in personalGenes"
+                  :key="gene.id"
+                  class="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/30 transition group"
+                >
+                  <div
+                    :class="['w-10 h-10 rounded-xl flex items-center justify-center shrink-0', iconColorClass(gene.slug)]"
                   >
-                    <Settings class="w-3.5 h-3.5" />
-                    {{ t('geneMarket.manageCategories') }}
-                  </button>
+                    <component :is="resolveIcon(gene.icon)" class="w-5 h-5 text-white" />
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm font-medium truncate">{{ gene.name }}</span>
+                      <span v-if="gene.category" class="text-[10px] px-1.5 py-0.5 rounded bg-muted/70 text-muted-foreground">{{ gene.category }}</span>
+                      <span class="text-[10px] text-muted-foreground">v{{ gene.version }}</span>
+                    </div>
+                    <p class="text-xs text-muted-foreground truncate mt-0.5">
+                      {{ gene.short_description ?? gene.description ?? '' }}
+                    </p>
+                  </div>
+                  <div class="flex items-center gap-1 shrink-0">
+                    <button
+                      class="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors"
+                      :title="t('geneMarket.downloadZip')"
+                      @click.stop="downloadLocalGene(gene.slug)"
+                    >
+                      <Download class="w-4 h-4" />
+                    </button>
+                    <button
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] border border-blue-300/60 text-blue-600 hover:bg-blue-500/5 transition-colors"
+                      :title="t('geneMarket.pushToOrgHint')"
+                      @click.stop="pushLocalGene(gene, 'org')"
+                    >
+                      <Building2 class="w-3 h-3" />
+                      {{ t('geneMarket.pushToOrg') }}
+                    </button>
+                    <button
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] border border-green-300/60 text-green-600 hover:bg-green-500/5 transition-colors"
+                      :title="t('geneMarket.pushToPublicHint')"
+                      @click.stop="pushLocalGene(gene, 'public')"
+                    >
+                      <Globe class="w-3 h-3" />
+                      {{ t('geneMarket.pushToPublic') }}
+                    </button>
+                    <button
+                      class="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/5 transition-colors"
+                      :title="t('common.delete')"
+                      @click.stop="deleteLocalGene(gene.id, gene.name)"
+                    >
+                      <Trash2 class="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
+              </div>
+            </div>
+
+            <!-- 上传区 -->
+            <div class="rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 p-6">
+              <div class="flex flex-col items-center gap-3">
+                <FolderOpen class="w-8 h-8 text-blue-400" />
+                <p class="text-sm text-gray-700 font-medium">{{ t('geneMarket.uploadNewSkill') }}</p>
 
                 <input
                   ref="localFolderInputRef"
@@ -1169,67 +1325,29 @@ function goToGenome(id: string) {
                   multiple
                   @change="onLocalFolderInput"
                 />
-                <button
-                  class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm text-blue-700 hover:bg-blue-50"
-                  @click="localFolderInputRef?.click()"
-                >
-                  <FolderOpen class="w-4 h-4" />
-                  选择文件夹
-                </button>
-              </div>
-
-              <div v-if="selectedLocalFiles.length > 0" class="mt-4">
-                <p class="text-xs font-medium text-gray-600 mb-2">
-                  已选 {{ selectedLocalFiles.length }} 个文件：
-                </p>
-                <ul class="max-h-40 overflow-y-auto rounded-lg bg-white border border-gray-200 divide-y divide-gray-100">
-                  <li
-                    v-for="path in selectedLocalFiles"
-                    :key="path"
-                    class="flex items-center gap-2 px-3 py-1.5 text-xs"
-                  >
-                    <Code2 v-if="path.endsWith('.py')" class="w-3 h-3 text-blue-500 shrink-0" />
-                    <FolderOpen v-else-if="path.includes('/')" class="w-3 h-3 text-gray-400 shrink-0" />
-                    <span class="text-gray-600">{{ path }}</span>
-                  </li>
-                </ul>
-
-                <!-- 直接上传只能进入个人库；组织库/公共市场内容需先落地个人库，再通过技能详情页的 Fork 功能同步过去 -->
-                <div class="mt-3 rounded-lg bg-white border border-gray-200 p-3">
-                  <p class="text-xs text-gray-600">
-                    <span class="font-medium text-gray-700">上传到个人技能 library</span>
-                    <span class="text-gray-500"> — 仅自己可见，立即可用。需要同步到组织库/公共市场，请上传后通过技能详情页的 Fork 功能操作。</span>
-                  </p>
-                </div>
-
-                <div class="mt-3 flex justify-end">
-                  <button
-                    :disabled="localUploading"
-                    class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                    @click="handleLocalFolder"
-                  >
-                    <span v-if="localUploading" class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                    <Upload v-else class="w-4 h-4" />
-                    {{ localUploading ? '上传中...' : '确认上传' }}
-                  </button>
-                </div>
-              </div>
-
-              <div class="mt-4 flex flex-col items-center gap-2">
-                <p class="text-xs text-gray-400">或上传 ZIP 包</p>
                 <input
                   ref="localFileInputRef"
                   type="file"
                   accept=".zip"
                   class="hidden"
-                  @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handleLocalFile(f) }"
+                  @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handleLocalFile(f); (e.target as HTMLInputElement).value = '' }"
                 />
-                <button
-                  class="inline-flex items-center gap-1.5 text-xs text-gray-500 underline underline-offset-2 hover:text-gray-700"
-                  @click="localFileInputRef?.click()"
-                >
-                  点击选择 .zip 文件
-                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-sm text-blue-700 hover:bg-blue-50"
+                    @click="localFolderInputRef?.click()"
+                  >
+                    <FolderOpen class="w-4 h-4" />
+                    {{ t('geneMarket.selectFolder') }}
+                  </button>
+                  <button
+                    class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-sm text-blue-700 hover:bg-blue-50"
+                    @click="localFileInputRef?.click()"
+                  >
+                    <FileArchive class="w-4 h-4" />
+                    {{ t('geneMarket.selectZip') }}
+                  </button>
+                </div>
               </div>
 
               <div v-if="localUploading" class="mt-4 flex items-center gap-2 text-sm text-blue-600 justify-center">
@@ -1247,36 +1365,15 @@ function goToGenome(id: string) {
             </div>
           </div>
 
-          <div
-            v-if="totalPages > 1"
-            class="flex items-center justify-center gap-2 mt-8"
-          >
+          <!-- 加载更多：点击后追加下一页（替代翻页） -->
+          <div v-if="canLoadMore" class="flex items-center justify-center mt-8">
             <button
-              :disabled="!canPrev"
-              :class="[
-                'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                canPrev
-                  ? 'text-foreground hover:bg-muted'
-                  : 'text-muted-foreground cursor-not-allowed',
-              ]"
-              @click="page = Math.max(1, page - 1)"
+              class="px-6 py-2 rounded-lg border border-border text-sm text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+              :disabled="store.loading"
+              @click="loadMore"
             >
-              {{ t('geneMarket.prevPage') }}
-            </button>
-            <span class="text-sm text-muted-foreground">
-              {{ page }} / {{ totalPages }}
-            </span>
-            <button
-              :disabled="!canNext"
-              :class="[
-                'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                canNext
-                  ? 'text-foreground hover:bg-muted'
-                  : 'text-muted-foreground cursor-not-allowed',
-              ]"
-              @click="page = Math.min(totalPages, page + 1)"
-            >
-              {{ t('geneMarket.nextPage') }}
+              <Loader2 v-if="store.loading" class="w-4 h-4 animate-spin inline mr-1.5" />
+              {{ t('geneMarket.loadMore') }}
             </button>
           </div>
         </template>
@@ -1352,51 +1449,86 @@ function goToGenome(id: string) {
     </div>
   </div>
 
-  <!-- 上传前逐技能分类弹层（选完文件夹/ZIP → 每个技能独立选分类 → 确认上传） -->
+  <!-- 上传前逐技能分类弹层（选完文件夹/ZIP → 可继续添加 → 每个技能独立选分类 → 全选好后一键提交） -->
   <Teleport to="body">
     <Transition name="fade">
       <div
         v-if="preUploadDialog"
         class="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center"
-        @click.self="!preUploadUploading && (preUploadDialog = false)"
       >
         <div class="bg-white border border-gray-200 rounded-2xl shadow-xl w-[28rem] max-h-[80vh] flex flex-col p-5 space-y-4">
-          <h3 class="text-sm font-semibold text-gray-800 shrink-0">
-            {{ t('geneMarket.preUploadTitle', { count: pendingSkills.length }) }}
-          </h3>
-          <div class="flex-1 overflow-y-auto space-y-3">
+          <div class="flex items-center justify-between shrink-0">
+            <h3 class="text-sm font-semibold text-gray-800">
+              {{ t('geneMarket.preUploadTitle', { count: pendingSkills.length }) }}
+            </h3>
+            <div class="flex items-center gap-1.5">
+              <!-- 继续添加入口：弹层不关，直接再选 ZIP / 文件夹 -->
+              <button
+                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-blue-300 text-blue-600 text-[11px] hover:bg-blue-50 transition-colors"
+                @click="localFileInputRef?.click()"
+              >
+                <FileArchive class="w-3 h-3" /> ZIP
+              </button>
+              <button
+                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-blue-300 text-blue-600 text-[11px] hover:bg-blue-50 transition-colors"
+                @click="localFolderInputRef?.click()"
+              >
+                <FolderOpen class="w-3 h-3" /> {{ t('geneMarket.addFolder') }}
+              </button>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto space-y-3 min-h-[6rem]">
             <div
               v-for="(skill, i) in pendingSkills"
-              :key="i"
+              :key="`${skill.name}-${i}`"
               class="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2"
             >
               <div class="flex items-center gap-2">
                 <Package class="w-3.5 h-3.5 text-blue-500 shrink-0" />
                 <span class="text-xs font-medium text-gray-700 flex-1 truncate">{{ skill.name }}</span>
                 <span class="text-[10px] text-gray-400">{{ skill.files.length }} 文件</span>
+                <button
+                  class="p-0.5 rounded text-gray-400 hover:text-red-500 transition-colors shrink-0"
+                  :title="t('common.delete')"
+                  @click="removePendingSkill(i)"
+                >
+                  <X class="w-3.5 h-3.5" />
+                </button>
               </div>
+              <!-- 技能描述（SKILL.md 解析，帮助用户判断该选什么分类） -->
+              <p v-if="skill.description" class="text-[11px] text-gray-500 leading-snug line-clamp-2 pl-6">
+                {{ skill.description }}
+              </p>
               <div class="flex items-center gap-2">
                 <select
                   v-model="skill.category"
-                  class="flex-1 px-2 py-1.5 rounded-lg border border-gray-300 bg-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  class="flex-1 px-2 py-1.5 rounded-lg border text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  :class="skill.category === '' ? 'border-orange-300 bg-orange-50' : 'border-gray-300 bg-white'"
                 >
-                  <option value="">{{ t('geneMarket.categorySkip') }}</option>
+                  <option value="">{{ t('geneMarket.categoryRequired') }}</option>
                   <option v-for="c in uploadCategoryOptions" :key="c.value" :value="c.value">{{ c.label }}</option>
                 </select>
               </div>
             </div>
           </div>
+
+          <!-- 未全选分类时的提示 -->
+          <p v-if="!allCategoriesSelected" class="text-[11px] text-orange-500 shrink-0">
+            {{ t('geneMarket.categoryAllRequired') }}
+          </p>
+
           <div class="flex gap-2 justify-end shrink-0">
             <button
               class="px-3 py-1.5 rounded-lg border border-gray-300 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
               :disabled="preUploadUploading"
-              @click="preUploadDialog = false"
+              @click="preUploadDialog = false; pendingSkills = []"
             >
               {{ t('common.cancel') }}
             </button>
             <button
               class="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
-              :disabled="preUploadUploading"
+              :disabled="preUploadUploading || !allCategoriesSelected"
               @click="confirmPreUpload"
             >
               <span v-if="preUploadUploading" class="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full mr-1" />
