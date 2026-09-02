@@ -76,9 +76,17 @@ class Mission(BaseModel):
     completion_token_cost: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    # token 保险丝确认时间戳：人工确认后本次 Mission 豁免保险丝（防确认-再触发死循环，设计 §6）
+    # token 保险丝确认时间戳（P1 语义：确认后豁免到底；P2 硬阻断改用 fuse_ack_count 计数）
     fuse_acknowledged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # token 保险丝确认次数：P2 硬阻断——每次确认阈值翻倍（fuse * 2^count），确认后继续监控
+    fuse_ack_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    # 任务优先级：0=normal / 1=urgent（P2 优先级插队：调度排序键 priority DESC, created_at ASC）
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"), index=True
     )
     # 拆解来源记录 {engine, prompt_version, schema_version, decomposition_reason}
     coordinator_meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

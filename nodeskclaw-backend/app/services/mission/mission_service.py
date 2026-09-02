@@ -269,6 +269,35 @@ def spawn_decomposition(mission_id: str, *, chat=None, session_factory=None) -> 
     return task
 
 
+async def set_mission_priority(
+    db: AsyncSession, mission: Mission, priority: int, *, user,
+) -> None:
+    """P2 优先级插队：0=normal / 1=urgent。仅发起人或 org admin 可改。"""
+    if mission.created_by != user.id and not getattr(user, "is_super_admin", False):
+        from app.models.org_membership import OrgMembership
+        role = (await db.execute(
+            select(OrgMembership.role).where(
+                OrgMembership.org_id == mission.org_id,
+                OrgMembership.user_id == user.id,
+                not_deleted(OrgMembership),
+            )
+        )).scalar_one_or_none()
+        if role != "admin":
+            from app.core.exceptions import ForbiddenError
+            raise ForbiddenError("仅发起人或管理员可设置优先级", "errors.mission.not_acceptor")
+
+    if mission.priority == priority:
+        return
+    mission.priority = priority
+    await MissionEventService(db).append(
+        mission.id, org_id=mission.org_id,
+        event_type="system_note", actor_type="user",
+        actor_id=user.id, actor_name=getattr(user, "name", None),
+        content=f"任务优先级已设为{'紧急' if priority == 1 else '普通'}",
+    )
+    await db.commit()
+
+
 async def cancel_mission(db: AsyncSession, mission: Mission, *, user) -> None:
     """任意时刻取消；未完成节点置 skipped。"""
     svc = MissionEventService(db)
@@ -336,10 +365,15 @@ async def answer_question(
     svc = MissionEventService(db)
 
     if event.event_type == "token_fuse_tripped":
+        # P2 硬阻断：确认后阈值翻倍（fuse * 2^(count+1)），继续监控不豁免
         await db.execute(
             update(Mission)
             .where(Mission.id == mission.id, Mission.status == "blocked_question")
-            .values(status="executing", fuse_acknowledged_at=_utcnow())
+            .values(
+                status="executing",
+                fuse_acknowledged_at=_utcnow(),
+                fuse_ack_count=Mission.fuse_ack_count + 1,
+            )
         )
     else:
         await db.execute(

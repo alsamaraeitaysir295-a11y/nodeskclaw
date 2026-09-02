@@ -67,6 +67,10 @@ class QuestionAnswerRequest(BaseModel):
     answer: str
 
 
+class PriorityRequest(BaseModel):
+    level: str  # "normal" | "urgent"
+
+
 class ReassignRequest(BaseModel):
     instance_id: str
 
@@ -197,6 +201,21 @@ async def cancel_mission(
     mission = await _load_mission(db, mission_id, user)
     await mission_service.cancel_mission(db, mission, user=user)
     return ApiResponse(message="任务已取消")
+
+
+@router.post("/missions/{mission_id}/priority", response_model=ApiResponse)
+async def set_priority(
+    mission_id: str,
+    body: PriorityRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    """P2 优先级插队：urgent 任务在同实例队列中排在 normal 之前（不中断运行中的节点）。"""
+    user, _org = ctx
+    mission = await _load_mission(db, mission_id, user)
+    priority = 1 if body.level == "urgent" else 0
+    await mission_service.set_mission_priority(db, mission, priority, user=user)
+    return ApiResponse(message="优先级已设置")
 
 
 @router.post("/missions/{mission_id}/nodes/{node_id}/retry", response_model=ApiResponse)

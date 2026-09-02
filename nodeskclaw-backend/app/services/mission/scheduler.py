@@ -104,6 +104,7 @@ class MissionScheduler:
     # ── token 保险丝（D12）────────────────────────────────────
 
     async def _check_token_fuses(self) -> int:
+        """P2 预算硬阻断：确认后继续监控——每次确认阈值翻倍（fuse * 2^ack_count），再超再断。"""
         tripped = 0
         async with self._sf() as db:
             missions = (await db.execute(
@@ -111,7 +112,7 @@ class MissionScheduler:
             )).scalars().all()
             for m in missions:
                 total = m.token_cost + m.prompt_token_cost + m.completion_token_cost
-                if total <= 0 or m.fuse_acknowledged_at is not None:
+                if total <= 0:
                     continue
                 cfg = (await db.execute(
                     select(MissionOrgConfig).where(
@@ -119,7 +120,11 @@ class MissionScheduler:
                     )
                 )).scalar_one_or_none()
                 fuse = cfg.mission_token_fuse if cfg else None
-                if not fuse or total < fuse:
+                if not fuse:
+                    continue
+                # P2 阶梯阈值：fuse * 2^已确认次数（第 0 次=fuse，确认后=fuse*2，再确认=fuse*4…）
+                effective_threshold = fuse * (2 ** (m.fuse_ack_count or 0))
+                if total < effective_threshold:
                     continue
                 res = await db.execute(
                     update(Mission)
@@ -132,13 +137,26 @@ class MissionScheduler:
                 )
                 if res.rowcount:
                     tripped += 1
+                    ack_count = m.fuse_ack_count or 0
                     await MissionEventService(db).append(
                         m.id, org_id=m.org_id,
                         event_type="token_fuse_tripped", actor_type="scheduler",
-                        content=f"token 消耗 {total} 已超过组织阈值 {fuse}，任务已挂起，请人工确认后继续",
-                        payload={"total_tokens": total, "fuse": fuse},
+                        content=(
+                            f"token 消耗 {total} 已超过阈值 {effective_threshold}"
+                            f"（第 {ack_count + 1} 次触发，基础阈值 {fuse}），任务已挂起，"
+                            f"请人工确认后继续"
+                        ),
+                        payload={
+                            "total_tokens": total,
+                            "fuse": fuse,
+                            "effective_threshold": effective_threshold,
+                            "ack_count": ack_count,
+                        },
                     )
-                    logger.warning("token 保险丝触发: mission=%s total=%d fuse=%d", m.id, total, fuse)
+                    logger.warning(
+                        "token 保险丝触发: mission=%s total=%d threshold=%d ack=%d",
+                        m.id, total, effective_threshold, ack_count,
+                    )
             await db.commit()
         return tripped
 
@@ -271,7 +289,7 @@ class MissionScheduler:
                     not_deleted(MissionNode),
                     not_deleted(Mission),
                 )
-                .order_by(Mission.created_at, MissionNode.seq)
+                .order_by(Mission.priority.desc(), Mission.created_at, MissionNode.seq)
             )).all()
             # 各 Mission 的 done seq 集合（派发前复核依赖）
             mission_ids = {node.mission_id for node, _ in rows}
@@ -354,13 +372,14 @@ class MissionScheduler:
             return True, package, task_id
 
     async def _build_task_package(self, db: AsyncSession, mission: Mission, node: MissionNode) -> dict:
-        """组装 §7.1 任务包（upstream_artifacts 带签名临时 URL）。"""
+        """组装 §7.1 任务包（upstream_artifacts 带签名 URL + upstream_conclusions 结论文）。"""
         siblings = (await db.execute(
             select(MissionNode).where(
                 MissionNode.mission_id == mission.id, not_deleted(MissionNode),
             )
         )).scalars().all()
-        upstream_ids = [n.id for n in siblings if n.seq in (node.depends_on or [])]
+        upstream_nodes = [n for n in siblings if n.seq in (node.depends_on or [])]
+        upstream_ids = [n.id for n in upstream_nodes]
 
         upstream_artifacts: list[dict] = []
         if upstream_ids:
@@ -379,6 +398,27 @@ class MissionScheduler:
                     url = ""
                 upstream_artifacts.append({"name": a.name, "kind": a.kind, "storage_url": url})
 
+        # P2 结论文交接：取上游节点 node_done 事件的 payload.summary，按 seq 有序注入
+        upstream_conclusions: list[dict] = []
+        if upstream_ids:
+            done_events = (await db.execute(
+                select(MissionEvent).where(
+                    MissionEvent.node_id.in_(upstream_ids),
+                    MissionEvent.event_type == "node_done",
+                    not_deleted(MissionEvent),
+                )
+            )).scalars().all()
+            summary_by_node = {}
+            for ev in done_events:
+                payload = ev.payload if isinstance(ev.payload, dict) else {}
+                summary_by_node[ev.node_id] = str(payload.get("summary") or ev.content or "")[:500]
+            for up in sorted(upstream_nodes, key=lambda n: n.seq):
+                summary = summary_by_node.get(up.id, "")
+                if summary:
+                    upstream_conclusions.append({
+                        "seq": up.seq, "title": up.title, "summary": summary,
+                    })
+
         brief = mission.brief or {}
         policy = mission.escalation_policy if isinstance(mission.escalation_policy, dict) else {}
         return {
@@ -394,6 +434,7 @@ class MissionScheduler:
                 "description": node.description or "",
                 "acceptance_criteria": node.acceptance_criteria or "",
             },
+            "upstream_conclusions": upstream_conclusions,
             "upstream_artifacts": upstream_artifacts,
             "escalation_rules": {
                 "l2_rules": policy.get("l2_rules", []),

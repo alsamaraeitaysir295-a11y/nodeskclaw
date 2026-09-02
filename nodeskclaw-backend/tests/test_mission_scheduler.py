@@ -323,8 +323,9 @@ async def test_running_stall_raises_l2_once():
 
 # ── token 保险丝（D12）────────────────────────────────────────────────────
 
-async def test_token_fuse_trips_and_ack_exempts():
-    """超阈值挂起 + L2 事件；人工确认（fuse_acknowledged_at）后不再重复触发。"""
+async def test_token_fuse_staircase_monitoring():
+    """P2 硬阻断：150>100 触发挂起；确认后阈值翻倍(200)，150<200 不再触发；
+    消耗涨到 250>200 再次挂起；再确认后阈值=400，250<400 不触发。"""
     org_id, user_id, ws_id, cluster_id = await make_env("sch")
     mission_id = await make_mission(org_id, ws_id, user_id, token_cost=150)
 
@@ -334,26 +335,42 @@ async def test_token_fuse_trips_and_ack_exempts():
         await db.commit()
 
     sender = FakeSender()
+    # 第 1 次：150 >= 100*2^0 → 挂起
     stats = await _scheduler([], sender).run_once()
     assert stats["fused"] == 1
     async with TestSessionLocal() as db:
         m = await db.get(Mission, mission_id)
         assert m.status == "blocked_question"
-        fuse_events = (await db.execute(
-            select(MissionEvent).where(
-                MissionEvent.mission_id == mission_id,
-                MissionEvent.event_type == "token_fuse_tripped",
-            )
-        )).scalars().all()
-        assert len(fuse_events) == 1
-        # 模拟人工确认：恢复 executing 并写入豁免时间戳
+        # 模拟人工确认：恢复 executing + 递增 ack_count（阈值变 100*2^1=200）
         m.status = "executing"
-        from datetime import datetime, timezone
-        m.fuse_acknowledged_at = datetime.now(timezone.utc)
+        m.fuse_ack_count = 1
         await db.commit()
 
+    # 第 2 次：150 < 200 → 不触发（确认后继续监控，阈值已抬高）
     stats2 = await _scheduler([], sender).run_once()
     assert stats2["fused"] == 0
     async with TestSessionLocal() as db:
         m = await db.get(Mission, mission_id)
-        assert m.status == "executing"  # 不再挂起
+        assert m.status == "executing"
+
+    # 消耗涨到 250 >= 200 → 再次挂起（第 2 次触发）
+    async with TestSessionLocal() as db:
+        m = await db.get(Mission, mission_id)
+        m.token_cost = 250
+        await db.commit()
+    stats3 = await _scheduler([], sender).run_once()
+    assert stats3["fused"] == 1
+    async with TestSessionLocal() as db:
+        m = await db.get(Mission, mission_id)
+        assert m.status == "blocked_question"
+        # 再确认：阈值变 100*2^2=400
+        m.status = "executing"
+        m.fuse_ack_count = 2
+        await db.commit()
+
+    # 250 < 400 → 不触发
+    stats4 = await _scheduler([], sender).run_once()
+    assert stats4["fused"] == 0
+    async with TestSessionLocal() as db:
+        m = await db.get(Mission, mission_id)
+        assert m.status == "executing"
