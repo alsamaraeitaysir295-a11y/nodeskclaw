@@ -1,17 +1,23 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
 import { resolveApiErrorMessage } from '@/i18n/error'
+import { Sun, Moon } from 'lucide-vue-next'
 import { useConfirm } from '@/composables/useConfirm'
 import { Loader2, Building2, BrainCircuit, Rocket, Target, Eye, EyeOff } from 'lucide-vue-next'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const themeStore = useThemeStore()
 const { t } = useI18n()
+
+// 登录页独立于 App.vue 渲染时也要应用已存的主题（dark class on <html>）
+onMounted(() => themeStore.apply())
 const { confirm } = useConfirm()
 
 const loading = ref(false)
@@ -93,11 +99,21 @@ function onLocaleChange(value: string) {
 
       <!-- 内容区 -->
       <div class="relative z-10 flex flex-col justify-between px-12 xl:px-20 py-12">
-        <!-- Logo -->
+        <!-- Logo + 主题切换 -->
         <div class="flex items-center gap-3">
-          <img src="/logo.png" alt="DeskClaw" class="w-10 h-10" />
-          <span class="text-xl font-bold tracking-tight">DeskClaw</span>
+          <span class="text-xl font-bold tracking-tight">HST-智能体管理平台</span>
           <span class="px-1.5 py-0.5 text-[10px] font-semibold leading-none rounded bg-primary/15 text-primary">Beta</span>
+          <div class="flex-1" />
+          <button
+            type="button"
+            class="h-8 w-8 rounded-md border border-border bg-card flex items-center justify-center text-foreground transition-all hover:border-primary/40 hover:bg-muted/30 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+            :aria-label="t('common.themeToggle')"
+            :title="t('common.themeToggle')"
+            @click="themeStore.toggle()"
+          >
+            <Sun v-if="themeStore.theme === 'dark'" class="h-4 w-4 text-muted-foreground" />
+            <Moon v-else class="h-4 w-4 text-muted-foreground" />
+          </button>
         </div>
 
         <!-- 主体 -->
@@ -156,9 +172,8 @@ function onLocaleChange(value: string) {
         </div>
         <!-- 移动端 Logo -->
         <div class="flex flex-col items-center gap-3 lg:hidden">
-          <img src="/logo.png" alt="DeskClaw" class="w-12 h-12" />
           <div class="flex items-center gap-2">
-            <span class="text-xl font-bold">DeskClaw</span>
+            <span class="text-xl font-bold">HST-智能体管理平台</span>
             <span class="px-1.5 py-0.5 text-[10px] font-semibold leading-none rounded bg-primary/15 text-primary">Beta</span>
           </div>
         </div>
@@ -242,7 +257,7 @@ function onLocaleChange(value: string) {
         <!-- 底部 -->
         <div class="pt-4 text-center">
           <p class="text-[11px] text-muted-foreground/50">
-            DeskClaw &copy; 2026 &middot; by <a href="https://nodesks.ai/" target="_blank" class="hover:text-muted-foreground transition-colors underline underline-offset-2">NoDesk AI</a>
+            HST-智能体管理平台 &copy; 2026
           </p>
         </div>
       </div>

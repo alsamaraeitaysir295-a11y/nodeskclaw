@@ -80,8 +80,7 @@ function onLocaleChange(value: string) {
       <header class="h-14 flex items-center justify-between px-6 border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-50">
         <div class="flex items-center gap-6 min-w-0">
           <div class="flex items-center gap-2 shrink-0 cursor-pointer" @click="router.push('/')">
-            <img src="/logo.png" alt="DeskClaw" class="w-5 h-5" />
-            <span class="font-bold text-base">DeskClaw</span>
+            <span class="font-bold text-base">HST-智能体管理平台</span>
             <span class="px-1.5 py-0.5 text-[10px] font-semibold leading-none rounded bg-primary/15 text-primary">{{ appVersion }}</span>
           </div>
           <nav v-if="!isSetupPage" class="flex items-center gap-1 overflow-x-auto min-w-0">
@@ -205,7 +204,6 @@ function onLocaleChange(value: string) {
             <Sun v-if="themeStore.theme === 'dark'" class="h-4 w-4 text-muted-foreground" />
             <Moon v-else class="h-4 w-4 text-muted-foreground" />
           </button>
-          <LocaleSelect :model-value="locale" @update:model-value="onLocaleChange" />
           <div class="relative" ref="userMenuRef">
           <button
             class="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center bg-primary/10 hover:ring-2 hover:ring-primary/30 transition-all"

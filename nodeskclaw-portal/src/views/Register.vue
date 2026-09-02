@@ -98,8 +98,7 @@ function onLocaleChange(value: string) {
 
       <div class="relative z-10 flex flex-col justify-between px-12 xl:px-20 py-12">
         <div class="flex items-center gap-3">
-          <img src="/logo.png" alt="DeskClaw" class="w-10 h-10" />
-          <span class="text-xl font-bold tracking-tight">DeskClaw</span>
+          <span class="text-xl font-bold tracking-tight">HST-智能体管理平台</span>
           <span class="px-1.5 py-0.5 text-[10px] font-semibold leading-none rounded bg-primary/15 text-primary">Beta</span>
         </div>
 

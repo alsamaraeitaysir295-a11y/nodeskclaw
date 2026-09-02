@@ -8,9 +8,9 @@ const THEME_STORAGE_KEY = 'portal_theme'
 function readStoredTheme(): Theme {
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY)
-    return stored === 'light' || stored === 'dark' ? stored : 'dark'
+    return stored === 'light' || stored === 'dark' ? stored : 'light'
   } catch {
-    return 'dark'
+    return 'light'
   }
 }
 

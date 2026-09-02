@@ -22,10 +22,8 @@ function detectInitialLocale(): AppLocale {
   if (fromStorage && SUPPORTED_LOCALES.includes(fromStorage as AppLocale)) {
     return fromStorage as AppLocale
   }
-  if (Array.isArray(window.navigator.languages) && window.navigator.languages.length > 0) {
-    return normalizeLocale(window.navigator.languages[0])
-  }
-  return normalizeLocale(window.navigator.language)
+  // 默认中文（不再按浏览器语言自动检测；切换入口已移除，仅 localStorage 可覆盖）
+  return 'zh-CN'
 }
 
 export const i18n = createI18n({
