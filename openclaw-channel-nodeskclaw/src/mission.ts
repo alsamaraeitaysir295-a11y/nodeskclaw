@@ -4,7 +4,8 @@
  * 职责：
  * - 翻译下行 mission.task.dispatch：存任务上下文 → 自动回 ack → 把任务包编译成
  *   提示词经本地 Gateway 发起会话（X-OpenClaw-Session-Key 用包内 session_key 做
- *   实例内会话隔离，设计 D7）→ 流结束回 done（Agent 已调 mission_complete 则跳过）
+ *   实例内会话隔离，设计 D7）→ 催办循环驱动至 Agent 显式 mission_complete；
+ *   done 只能由显式声明产生，轮数用尽无声明转 L2 人工确认（防"假完成"）
  * - 提供 4 个 Agent 工具（report / submit_artifact / block / complete），经
  *   collaboration 上行通道发 mission.task.* 消息（后端 ingest_service 消费）
  * - 单实例同时只处理一个任务（后端 D9 实例串行保证），故模块级单槽任务上下文即可
@@ -14,6 +15,9 @@ import type { AnyAgentTool } from "openclaw/plugin-sdk";
 
 const GATEWAY_PORT_DEFAULT = 3000;
 
+/** 催办循环上限：Agent 未显式 mission_complete 时最多追加驱动的轮数。 */
+const MAX_DRIVE_ROUNDS = 5;
+
 /** 下行任务包（设计 §7.1 mission.task.dispatch 的 data 部分）。 */
 export interface MissionTaskPackage {
   session_key: string;
@@ -22,6 +26,8 @@ export interface MissionTaskPackage {
   subtask: { title: string; description: string; acceptance_criteria: string };
   upstream_conclusions?: Array<{ seq: number; title: string; summary: string }>;
   upstream_artifacts: Array<{ name: string; kind: string; storage_url: string }>;
+  /** 编排者打回反馈（历次复核未通过原因 + 最近人工答复），重派时注入 */
+  review_feedback?: string[];
   escalation_rules: { l2_rules: string[]; l1_hint: string };
   report_guidance: string;
 }
@@ -31,6 +37,8 @@ interface ActiveTask {
   pkg: MissionTaskPackage;
   /** Agent 已主动 mission_complete 时置位，流结束不再重复回 done。 */
   completed: boolean;
+  /** Agent 已 L2 阻塞时置位，停止催办循环（等待人类处理）。 */
+  blocked: boolean;
 }
 
 let activeTask: ActiveTask | null = null;
@@ -58,7 +66,7 @@ function uplink(payload: Record<string, unknown>): void {
 }
 
 export function setActiveTask(taskId: string, pkg: MissionTaskPackage): void {
-  activeTask = { taskId, pkg, completed: false };
+  activeTask = { taskId, pkg, completed: false, blocked: false };
 }
 
 export function getActiveTask(): ActiveTask | null {
@@ -96,6 +104,12 @@ export function buildTaskPrompt(pkg: MissionTaskPackage): string {
       .join("；");
     lines.push(`上游产物（带签名的临时下载链接，可直接 GET）：${arts}`);
   }
+  if (pkg.review_feedback?.length) {
+    lines.push("编排者打回反馈（上一轮产出未通过验收，必须针对性改进后重新提交）：");
+    for (const f of pkg.review_feedback) {
+      lines.push(`  - ${f}`);
+    }
+  }
   if (pkg.escalation_rules?.l2_rules?.length) {
     lines.push(
       `以下情形必须先调用 mission_block 阻塞等待人类确认，不得自行动作：${pkg.escalation_rules.l2_rules.join("；")}`,
@@ -107,6 +121,14 @@ export function buildTaskPrompt(pkg: MissionTaskPackage): string {
   lines.push(
     pkg.report_guidance ||
       "执行中请定期调用 mission_report 播报进展；完成后调用 mission_complete 提交总结；产物用 mission_submit_artifact 上交。",
+  );
+  lines.push(
+    "重要：读取文件时注意控制上下文——大文件只读需要的部分（用 offset/limit 参数分段），"
+    + "不要一次性读完整个大文件；每次工具调用后先总结要点再决定下一步，避免上下文膨胀。",
+  );
+  lines.push(
+    "完成判定：只有调用 mission_complete 才视为任务完成，仅输出文字总结不构成完成；"
+    + "部分完成时不要停，继续执行剩余部分，全部完成后调用 mission_complete。",
   );
   lines.push(
     "工具用法：mission_report(message)；mission_submit_artifact(name, kind, content_b64)；" +
@@ -165,41 +187,73 @@ export async function handleMissionDispatch(
   const gatewayPort =
     parseInt(process.env.OPENCLAW_GATEWAY_PORT ?? "", 10) || GATEWAY_PORT_DEFAULT;
   const url = `http://localhost:${gatewayPort}/v1/chat/completions`;
+
+  // 执行中定期播报进度（30s 一次），让前端时间线有"正在干什么"的实时感
+  const progressTimer = setInterval(() => {
+    if (activeTask?.taskId === taskId) {
+      send({ type: "mission.task.progress", task_id: taskId, data: {
+        message: `正在执行「${pkg.subtask.title}」…（已等待 ${Math.round((Date.now() - startTime) / 1000)}s）`,
+        phase: "executing",
+      } });
+    }
+  }, 30_000);
+  const startTime = Date.now();
+
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${opts?.token ?? ""}`,
-        "X-OpenClaw-Session-Key": pkg.session_key,
-      },
-      body: JSON.stringify({
-        model: opts?.model ?? "openclaw/main",
-        messages: [{ role: "user", content: buildTaskPrompt(pkg) }],
-        stream: false,
-      }),
-    });
-    if (!resp.ok) {
-      console.error("[mission] Gateway 响应异常: %d", resp.status);
-      missionSend("mission.task.blocked", {
-        reason: `本地模型调用失败（HTTP ${resp.status}）`,
-        question: { level: "L2", message: "本地模型调用失败，请检查实例模型配置" },
+    // 催办循环：会话结束≠任务完成（Agent 可能中途停下/上下文截断）。
+    // done 只能由 Agent 显式调用 mission_complete 产生；未声明则同会话追加催办
+    // 继续驱动，轮数用尽仍无声明 → L2 阻塞交人工（防"假完成"污染下游节点）。
+    let nudge = buildTaskPrompt(pkg);
+    let lastOutput = "";
+    for (let round = 1; round <= MAX_DRIVE_ROUNDS; round++) {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${opts?.token ?? ""}`,
+          "X-OpenClaw-Session-Key": pkg.session_key,
+        },
+        body: JSON.stringify({
+          model: opts?.model ?? "openclaw/main",
+          messages: [{ role: "user", content: nudge }],
+          stream: false,
+        }),
       });
-      return;
+      if (!resp.ok) {
+        console.error("[mission] Gateway 响应异常: %d", resp.status);
+        missionSend("mission.task.blocked", {
+          reason: `本地模型调用失败（HTTP ${resp.status}）`,
+          question: { level: "L2", message: "本地模型调用失败，请检查实例模型配置" },
+        });
+        return;
+      }
+      const body = (await resp.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      lastOutput = body.choices?.[0]?.message?.content ?? "";
+      const cur = activeTask?.taskId === taskId ? activeTask : null;
+      if (!cur) return; // 任务被顶替/清理
+      if (cur.completed || cur.blocked) return; // 已显式完成 / L2 等人，不再催办
+      nudge =
+        "任务尚未完成。请继续执行剩余部分；全部完成后必须调用 mission_complete 提交总结，" +
+        "如遇无法自行解决的问题调用 mission_block（L2）。注意：仅回复文字不构成完成。";
     }
-    const body = (await resp.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const summary = body.choices?.[0]?.message?.content ?? "";
-    if (activeTask?.taskId === taskId && !activeTask.completed) {
-      send({ type: "mission.task.done", task_id: taskId, data: { summary } });
-    }
+    console.warn("[mission] Agent %d 轮未显式完成，转 L2 人工确认: %s", MAX_DRIVE_ROUNDS, taskId);
+    missionSend("mission.task.blocked", {
+      reason: `Agent 连续 ${MAX_DRIVE_ROUNDS} 轮对话未调用 mission_complete`,
+      question: {
+        level: "L2",
+        message: `Agent 未明确报告任务完成，请人工确认。Agent 最后输出：\n${lastOutput.slice(0, 2000)}`,
+      },
+    });
   } catch (err) {
     console.error("[mission] 任务执行失败:", err);
     missionSend("mission.task.blocked", {
       reason: err instanceof Error ? err.message : String(err),
       question: { level: "L2", message: "任务执行过程发生异常" },
     });
+  } finally {
+    clearInterval(progressTimer);
   }
 }
 
@@ -292,6 +346,7 @@ export function createMissionBlockTool(): AnyAgentTool {
       const p = args as Record<string, unknown>;
       if (!activeTask) return jsonResult({ error: "no active mission task" });
       const level = String(p.question_level ?? "L1").toUpperCase() === "L2" ? "L2" : "L1";
+      if (level === "L2") activeTask.blocked = true; // L2 等人类处理，停止催办循环
       missionSend("mission.task.blocked", {
         reason: String(p.reason ?? ""),
         question: {

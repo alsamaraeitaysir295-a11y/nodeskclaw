@@ -52,6 +52,7 @@ test("buildTaskPrompt：含任务标题/目标/验收/上游产物/L2 边界/工
     "brief.md",
     "付费购买数据",
     "mission_complete",
+    "仅输出文字总结不构成完成",
   ]) {
     assert.ok(prompt.includes(expect), `prompt 缺少: ${expect}`);
   }
@@ -79,25 +80,70 @@ test("handleMissionDispatch：收到即自动回 ack（首个上行消息）", a
   assert.equal(sent[1]?.type, "mission.task.blocked");
 });
 
-test("handleMissionDispatch：Gateway 正常时回 done 携带总结", async () => {
+test("handleMissionDispatch：Agent 未显式完成 → 催办 5 轮后转 L2 阻塞（不再假 done）", async () => {
   _resetActiveTask();
   const sent: Array<Record<string, unknown>> = [];
   _setUplinkForTest((p) => sent.push(p));
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => ({
-    ok: true,
-    json: async () => ({ choices: [{ message: { content: "已完成搜集" } }] }),
-  })) as typeof fetch;
+  let fetchCalls = 0;
+  const bodies: Array<string> = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    fetchCalls += 1;
+    bodies.push(String(JSON.parse(String(init?.body)).messages[0].content));
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "📊 调研进展播报（2/4）" } }] }),
+    };
+  }) as typeof fetch;
   try {
-    await handleMissionDispatch({ task_id: "t-done", protocol_version: 1, data: PKG });
+    await handleMissionDispatch({ task_id: "t-stuck", protocol_version: 1, data: PKG });
   } finally {
     globalThis.fetch = originalFetch;
     _setUplinkForTest(null);
   }
+  // 首轮任务包 + 4 轮催办 = 5 次网关调用；第 2 轮起消息为催办指令
+  assert.equal(fetchCalls, 5);
+  assert.ok(bodies[0].includes("搜集资料"));
+  assert.ok(bodies[1].includes("任务尚未完成"));
+  // 上行序列：ack → （无 done）→ L2 blocked 附最后输出
+  const types = sent.map((m) => m.type);
+  assert.deepEqual(types, ["mission.task.ack", "mission.task.blocked"]);
+  const blocked = sent[1] as { data?: { question?: { level?: string; message?: string } } };
+  assert.equal(blocked.data?.question?.level, "L2");
+  assert.ok(blocked.data?.question?.message?.includes("调研进展播报"));
+});
+
+test("handleMissionDispatch：Agent 会话中显式 mission_complete → 不催办不重复 done", async () => {
+  _resetActiveTask();
+  const sent: Array<Record<string, unknown>> = [];
+  _setUplinkForTest((p) => sent.push(p));
+  const completeTool = MISSION_TOOL_FACTORIES
+    .map((f) => f())
+    .find((t) => (t as { name: string }).name === "mission_complete") as unknown as {
+    execute: (_id: string, args: unknown) => Promise<string>;
+  };
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls += 1;
+    // 模拟 Agent 在会话内调用 mission_complete 后才返回响应
+    await completeTool.execute("x", { summary: "对比表已产出并提交产物" });
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "已完成" } }] }),
+    };
+  }) as typeof fetch;
+  try {
+    await handleMissionDispatch({ task_id: "t-ok", protocol_version: 1, data: PKG });
+  } finally {
+    globalThis.fetch = originalFetch;
+    _setUplinkForTest(null);
+  }
+  assert.equal(fetchCalls, 1); // 显式完成 → 不进入催办循环
   const types = sent.map((m) => m.type);
   assert.deepEqual(types, ["mission.task.ack", "mission.task.done"]);
   const done = sent[1] as { data?: { summary?: string } };
-  assert.equal(done.data?.summary, "已完成搜集");
+  assert.equal(done.data?.summary, "对比表已产出并提交产物");
 });
 
 test("4 个 mission 工具已注册且命名符合协议", async () => {
