@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 SCAN_INTERVAL_S = 5
 ACK_TIMEOUT_S = 60
 RUNNING_STALL_S = 30 * 60
+# P1.6 上下文防爆：单节点 tool_trace 事件数上限，超限自动暂停 + L2
+MAX_TOOL_TRACES_PER_NODE = 50
 # 实例占用态：这些状态下实例被视为"正在处理一个节点"（D9 串行依据）
 OCCUPYING_STATUSES = ("dispatched", "acked", "running")
 
@@ -68,6 +70,7 @@ class MissionScheduler:
         scan_interval_s: int = SCAN_INTERVAL_S,
         ack_timeout_s: int = ACK_TIMEOUT_S,
         running_stall_s: int = RUNNING_STALL_S,
+        max_tool_traces: int = MAX_TOOL_TRACES_PER_NODE,
     ):
         self._sf = session_factory
         self._tunnel = tunnel
@@ -75,6 +78,7 @@ class MissionScheduler:
         self._scan_interval_s = scan_interval_s
         self._ack_timeout_s = ack_timeout_s
         self._running_stall_s = running_stall_s
+        self._max_tool_traces = max_tool_traces
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -286,6 +290,8 @@ class MissionScheduler:
                     MissionNode.status == "matched",
                     MissionNode.assigned_instance_id.is_not(None),
                     Mission.status == "executing",
+                    # step_review 门控：暂停审核中的任务不派发下游节点
+                    Mission.paused_for_review.is_(False),
                     not_deleted(MissionNode),
                     not_deleted(Mission),
                 )
@@ -421,6 +427,11 @@ class MissionScheduler:
 
         brief = mission.brief or {}
         policy = mission.escalation_policy if isinstance(mission.escalation_policy, dict) else {}
+
+        # 编排者打回反馈（含最近一次人工答复）注入任务包，驱动子智能体针对性改进
+        from app.services.mission.coordinator_review import collect_review_feedback
+        review_feedback = await collect_review_feedback(db, node.id, mission.id)
+
         return {
             "session_key": node.session_key,
             "mission_title": mission.title,
@@ -436,6 +447,7 @@ class MissionScheduler:
             },
             "upstream_conclusions": upstream_conclusions,
             "upstream_artifacts": upstream_artifacts,
+            "review_feedback": review_feedback,
             "escalation_rules": {
                 "l2_rules": policy.get("l2_rules", []),
                 "l1_hint": policy.get("l1_hint", "可带假设继续的歧义，先说明假设再继续"),
@@ -519,6 +531,35 @@ class MissionScheduler:
                 )
             )).scalars().all()
             for node in running:
+                # P1.6 上下文防爆：tool_trace 超限 → 自动暂停 + L2（防死循环刷上下文）
+                tool_count = (await db.execute(
+                    select(func.count()).where(
+                        MissionEvent.node_id == node.id,
+                        MissionEvent.event_type == "tool_trace",
+                        not_deleted(MissionEvent),
+                    )
+                )).scalar() or 0
+                if tool_count > self._max_tool_traces:
+                    if await self._has_open_l2(db, node.id):
+                        continue
+                    mission = await db.get(Mission, node.mission_id)
+                    if mission is None or mission.status != "executing":
+                        continue
+                    await db.execute(
+                        update(MissionNode)
+                        .where(MissionNode.id == node.id, MissionNode.status == "running")
+                        .values(status="blocked_question")
+                    )
+                    await MissionEventService(db).append(
+                        mission.id, org_id=mission.org_id, node_id=node.id,
+                        event_type="l2_question", actor_type="scheduler",
+                        content=f"节点「{node.title}」工具调用已达 {tool_count} 次"
+                                f"（上限 {self._max_tool_traces}），可能存在循环，请人工检查",
+                        payload={"reason": "tool_trace_limit", "count": tool_count},
+                    )
+                    stalled += 1
+                    continue
+
                 last_active = (await db.execute(
                     select(func.max(MissionEvent.created_at)).where(MissionEvent.node_id == node.id)
                 )).scalar() or node.started_at or node.dispatched_at

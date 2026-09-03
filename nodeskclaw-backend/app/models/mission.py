@@ -88,6 +88,14 @@ class Mission(BaseModel):
     priority: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0"), index=True
     )
+    # 执行模式（P2）：auto=自动执行全部节点 / step_review=每个节点完成后暂停等人工审核
+    execution_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="auto", server_default="auto",
+    )
+    # step_review 模式下节点完成后置 True；人工审核通过后置 False 恢复调度
+    paused_for_review: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default=text("false"),
+    )
     # 拆解来源记录 {engine, prompt_version, schema_version, decomposition_reason}
     coordinator_meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # 来自 BaseModel：id / created_at / updated_at / deleted_at（软删除）

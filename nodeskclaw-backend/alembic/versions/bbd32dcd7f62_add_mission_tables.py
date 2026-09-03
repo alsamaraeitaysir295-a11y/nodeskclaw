@@ -20,6 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 # 平台预置能力词表（设计 §3.6，org_id=NULL 表示平台级，org 管理员可另建自己的词表）。
 # description 供编排器 prompt 使用，说明标签语义。
+# 同源副本：app/services/mission/capability_seed.py（测试基建用，venv 的 alembic
+# 库遮蔽本地 alembic/ 目录所以那边不能 import 本模块）——改标签必须两处同步。
 PLATFORM_CAPABILITY_TAGS = [
     ("backend", "后端开发", "Backend", "服务端程序与 API 设计、数据库建模与编码实现"),
     ("frontend", "前端开发", "Frontend", "Web 页面开发、交互实现与样式还原"),

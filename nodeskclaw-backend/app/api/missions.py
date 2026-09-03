@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_org, get_db
 from app.core.exceptions import NotFoundError
 from app.models.base import not_deleted
+from app.models.mission import Mission
 from app.models.mission_artifact import MissionArtifact
 from app.models.mission_event import MissionEvent
 from app.models.mission_node import MissionNode
@@ -65,6 +66,21 @@ class MissionRejectRequest(BaseModel):
 
 class QuestionAnswerRequest(BaseModel):
     answer: str
+
+
+class SaveAsTemplateRequest(BaseModel):
+    name: str
+    description: str = ""
+
+
+class TemplateRunRequest(BaseModel):
+    requirement_text: str
+    execution_mode: str | None = None  # 覆盖模板的 auto / step_review
+
+
+class ReviewContinueRequest(BaseModel):
+    action: str  # approve / reject / pause
+    node_id: str | None = None  # reject 时指定打回的节点
 
 
 class PriorityRequest(BaseModel):
@@ -203,6 +219,19 @@ async def cancel_mission(
     return ApiResponse(message="任务已取消")
 
 
+@router.delete("/missions/{mission_id}", response_model=ApiResponse)
+async def delete_mission(
+    mission_id: str,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    """删除对话：任意状态可删；活跃态先置 cancelled 再全链软删（节点/事件/产物一并不可见）。"""
+    user, _org = ctx
+    mission = await _load_mission(db, mission_id, user)
+    await mission_service.delete_mission(db, mission, user=user)
+    return ApiResponse(message="对话已删除")
+
+
 @router.post("/missions/{mission_id}/priority", response_model=ApiResponse)
 async def set_priority(
     mission_id: str,
@@ -216,6 +245,168 @@ async def set_priority(
     priority = 1 if body.level == "urgent" else 0
     await mission_service.set_mission_priority(db, mission, priority, user=user)
     return ApiResponse(message="优先级已设置")
+
+
+# ── 工作流模板（设计 §二/§三） ─────────────────────────────────────
+
+@router.post("/missions/{mission_id}/save-as-template", response_model=ApiResponse)
+async def save_mission_as_template(
+    mission_id: str,
+    body: SaveAsTemplateRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    """验收通过/已归档的任务保存为工作流模板（DAG 快照）。"""
+    user, _org = ctx
+    mission = await _load_mission(db, mission_id, user)
+    if mission.status not in ("acceptance", "archived"):
+        from app.core.exceptions import BadRequestError
+        raise BadRequestError("仅验收通过或已归档的任务可保存为模板", "errors.mission.invalid_state")
+    await mission_service.accept_mission(
+        db, mission, user=user,
+        save_as_template={"name": body.name, "description": body.description},
+    )
+    return ApiResponse(message="已保存为工作流模板")
+
+
+@router.get("/workspaces/{workspace_id}/mission-templates", response_model=ApiResponse)
+async def list_mission_templates(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    user, _org = ctx
+    await wm_service.check_workspace_member(workspace_id, user, db)
+    from app.services.mission import template_service
+    templates = await template_service.list_templates(db, workspace_id)
+    return ApiResponse(data=[{
+        "id": t.id, "name": t.name, "description": t.description,
+        "mission_type": t.mission_type, "execution_mode": t.execution_mode,
+        "usage_count": t.usage_count,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+    } for t in templates])
+
+
+@router.post("/mission-templates/{template_id}/run", response_model=ApiResponse)
+async def run_mission_template(
+    template_id: str,
+    body: TemplateRunRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    """从模板实例化 Mission（跳过 LLM 拆解，直接建节点 → awaiting_confirm）。"""
+    user, org = ctx
+    from app.services.mission import template_service
+    template = await template_service.get_template(db, template_id)
+    await wm_service.check_workspace_member(template.workspace_id or "", user, db)
+    mission = await template_service.instantiate_from_template(
+        db, template, org=org, user=user,
+        workspace_id=template.workspace_id or "",
+        requirement_text=body.requirement_text,
+        execution_mode=body.execution_mode,
+    )
+    return ApiResponse(data={"id": mission.id, "status": mission.status})
+
+
+@router.delete("/mission-templates/{template_id}", response_model=ApiResponse)
+async def delete_mission_template(
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    user, _org = ctx
+    from app.services.mission import template_service
+    template = await template_service.get_template(db, template_id)
+    if template.created_by != user.id and not user.is_super_admin:
+        from app.core.exceptions import ForbiddenError
+        raise ForbiddenError("仅创建者或管理员可删除模板", "errors.mission.not_acceptor")
+    template.soft_delete()
+    await db.commit()
+    return ApiResponse(message="模板已删除")
+
+
+class ChatEditRequest(BaseModel):
+    instruction: str  # 自然语言修改指令，如"把第2步标签改成data-analysis"
+
+
+@router.post("/missions/{mission_id}/chat-edit", response_model=ApiResponse)
+async def chat_edit_nodes(
+    mission_id: str,
+    body: ChatEditRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    """对话式节点修改：LLM 解析自然语言指令并直接应用到 pending 节点。
+
+    仅 awaiting_confirm 状态可用；修改后发 system_note 事件，用户看结果满意再点确认。
+    """
+    from app.core.exceptions import BadRequestError
+    user, _org = ctx
+    mission = await _load_mission(db, mission_id, user)
+    if mission.status != "awaiting_confirm":
+        raise BadRequestError("仅待确认状态可修改节点", "errors.mission.invalid_state")
+
+    from app.services.mission.chat_edit_service import parse_and_apply_edit
+    summary = await parse_and_apply_edit(db, mission, body.instruction, user=user)
+    return ApiResponse(message=summary)
+
+
+@router.post("/missions/{mission_id}/review-continue", response_model=ApiResponse)
+async def review_continue(
+    mission_id: str,
+    body: ReviewContinueRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(get_current_org),
+):
+    """step_review 模式的节点审核：approve 继续 / reject 打回 / pause 保持暂停。"""
+    user, _org = ctx
+    mission = await _load_mission(db, mission_id, user)
+
+    from sqlalchemy import update as sa_update
+    from app.services.mission.event_service import MissionEventService
+
+    if body.action == "approve":
+        await db.execute(sa_update(Mission).where(
+            Mission.id == mission.id,
+        ).values(paused_for_review=False))
+        await MissionEventService(db).append(
+            mission.id, org_id=mission.org_id,
+            event_type="system_note", actor_type="user",
+            actor_id=user.id, actor_name=getattr(user, "name", None),
+            content="审核通过，继续执行",
+        )
+        await db.commit()
+        return ApiResponse(message="已继续执行")
+    elif body.action == "reject":
+        if not body.node_id:
+            from app.core.exceptions import BadRequestError
+            raise BadRequestError("打回需指定 node_id", "errors.mission.invalid_state")
+        node = await db.get(MissionNode, body.node_id)
+        if node is None or node.mission_id != mission.id:
+            from app.core.exceptions import NotFoundError
+            raise NotFoundError("节点不存在", "errors.mission.node_not_found")
+        node.status = "pending"
+        node.attempt_count = 0
+        await db.execute(sa_update(Mission).where(
+            Mission.id == mission.id,
+        ).values(paused_for_review=False))
+        await MissionEventService(db).append(
+            mission.id, org_id=mission.org_id, node_id=node.id,
+            event_type="system_note", actor_type="user",
+            actor_id=user.id, actor_name=getattr(user, "name", None),
+            content=f"节点「{node.title}」已打回重做",
+        )
+        await db.commit()
+        return ApiResponse(message="节点已打回重做")
+    elif body.action == "pause":
+        await db.execute(sa_update(Mission).where(
+            Mission.id == mission.id,
+        ).values(paused_for_review=True))
+        await db.commit()
+        return ApiResponse(message="已保持暂停")
+    else:
+        from app.core.exceptions import BadRequestError
+        raise BadRequestError("无效操作", "errors.mission.invalid_state")
 
 
 @router.post("/missions/{mission_id}/nodes/{node_id}/retry", response_model=ApiResponse)

@@ -38,6 +38,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def broadcast_mission_event(workspace_id: str, event_type: str, data: dict) -> None:
+    """把任务事件推到协作空间聊天流（Phase 2 聊天式任务流）。"""
+    try:
+        from app.api.workspaces import broadcast_event
+        broadcast_event(workspace_id, event_type, data)
+    except Exception:
+        pass  # 广播失败不影响任务主流程
+
+
 async def get_mission(db: AsyncSession, mission_id: str) -> Mission:
     m = await db.get(Mission, mission_id)
     if m is None or m.deleted_at is not None:
@@ -157,6 +166,19 @@ async def run_decomposition(mission_id: str, *, chat=None, session_factory=None)
             .values(status=next_status)
         )
         await db.commit()
+
+        # Phase 2：推到协作空间聊天流
+        broadcast_mission_event(mission.workspace_id, "mission:decomposed", {
+            "mission_id": mission_id,
+            "title": result.mission_title,
+            "node_count": len(result.nodes),
+            "mission_type": mission_type,
+            "status": next_status,
+            "nodes": [
+                {"seq": n["seq"], "title": n["title"], "tags": n["capability_tags"]}
+                for n in nodes_payload
+            ],
+        })
         return True
 
 
@@ -323,6 +345,41 @@ async def cancel_mission(db: AsyncSession, mission: Mission, *, user) -> None:
     await db.commit()
 
 
+async def delete_mission(db: AsyncSession, mission: Mission, *, user) -> None:
+    """删除对话：任务全链软删（mission/nodes/events/artifacts 一并不可见）。
+
+    任意状态可删；活跃态先 CAS 置 cancelled（调度器/拆解后台任务不再处理），
+    未完成节点置 skipped（与 cancel 同语义）。软删后插件迟到回报在
+    ingest 入口被 not_deleted(MissionNode) 拒绝，无需额外清理。
+    """
+    active = ("draft", "decomposing", "awaiting_confirm", "executing",
+              "blocked_question", "acceptance")
+    await db.execute(
+        update(Mission)
+        .where(Mission.id == mission.id, Mission.status.in_(active))
+        .values(status="cancelled", paused_for_review=False)
+    )
+    unfinished = ("pending", "matched", "dispatched", "acked", "running",
+                  "blocked_question", "blocked_dependency")
+    await db.execute(
+        update(MissionNode)
+        .where(MissionNode.mission_id == mission.id, MissionNode.status.in_(unfinished), not_deleted(MissionNode))
+        .values(status="skipped")
+    )
+    now = _utcnow()
+    mission.soft_delete()
+    for table in (MissionNode, MissionEvent, MissionArtifact):
+        await db.execute(
+            update(table)
+            .where(table.mission_id == mission.id, not_deleted(table))
+            .values(deleted_at=now)
+        )
+    await db.commit()
+    broadcast_mission_event(mission.workspace_id, "mission:deleted", {
+        "mission_id": mission.id, "title": mission.title,
+    })
+
+
 async def retry_node(db: AsyncSession, mission: Mission, node: MissionNode) -> None:
     """失败节点重试：回 pending、attempt 清零。"""
     if node.status != "failed":
@@ -395,11 +452,35 @@ async def answer_question(
         content=answer,
         payload={"answers_event_seq": event.seq},
     )
+
+    # 编排者复核升级 L2 的人工答复：含 force_accept 关键词 → 强制验收通过该节点
+    ep = event.payload if isinstance(event.payload, dict) else {}
+    force_kw = ep.get("force_accept")
+    if event.node_id and isinstance(force_kw, list) and any(k in answer for k in force_kw):
+        node = await db.get(MissionNode, event.node_id)
+        if node is not None and node.mission_id == mission.id and node.status not in ("done", "skipped"):
+            await db.execute(
+                update(MissionNode)
+                .where(MissionNode.id == node.id)
+                .values(status="done", finished_at=_utcnow())
+            )
+            await svc.append(
+                mission.id, org_id=mission.org_id, node_id=node.id,
+                event_type="node_done", actor_type="user",
+                actor_id=user.id, actor_name=getattr(user, "name", None),
+                content=f"人工验收通过：{answer}",
+            )
     await db.commit()
 
 
-async def accept_mission(db: AsyncSession, mission: Mission, *, user) -> None:
-    """验收通过：acceptance → archived。仅发起人或 org admin。"""
+async def accept_mission(
+    db: AsyncSession, mission: Mission, *, user,
+    save_as_template: dict | None = None,
+) -> None:
+    """验收通过：acceptance → archived。仅发起人或 org admin。
+
+    save_as_template={name, description} 非空时同事务保存工作流模板（原子绑定）。
+    """
     res = await db.execute(
         update(Mission)
         .where(Mission.id == mission.id, Mission.status == "acceptance")
@@ -413,6 +494,19 @@ async def accept_mission(db: AsyncSession, mission: Mission, *, user) -> None:
         actor_id=user.id, actor_name=getattr(user, "name", None),
         content="验收通过，任务已归档",
     )
+    if save_as_template and save_as_template.get("name"):
+        from app.services.mission.template_service import save_as_template as _save
+        template = await _save(
+            db, mission,
+            name=save_as_template["name"],
+            description=save_as_template.get("description") or "",
+            user=user,
+        )
+        await MissionEventService(db).append(
+            mission.id, org_id=mission.org_id,
+            event_type="system_note", actor_type="user",
+            content=f"已保存为工作流模板「{template.name}」",
+        )
     await db.commit()
 
 

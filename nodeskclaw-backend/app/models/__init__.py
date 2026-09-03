@@ -43,6 +43,7 @@ from app.models.mission_artifact import MissionArtifact  # noqa: F401
 from app.models.mission_event import MissionEvent, MissionEventCounter  # noqa: F401
 from app.models.mission_node import MissionNode  # noqa: F401
 from app.models.mission_org_config import MissionOrgConfig  # noqa: F401
+from app.models.mission_template import MissionTemplate, MissionTemplateNode  # noqa: F401
 from app.models.node_card import NodeCard  # noqa: F401
 from app.models.node_type import NodeTypeDefinition  # noqa: F401
 from app.models.org_llm_key import OrgLlmKey, OrgModelProvider  # noqa: F401

@@ -227,6 +227,68 @@ async def test_cancel_skips_unfinished_nodes(client, _mission_api_env):
         assert all(n.status == "skipped" for n in nodes)
 
 
+async def test_delete_mission_full_chain(client, _mission_api_env):
+    """删除对话：执行中任务先置 cancelled，mission/节点/事件/产物全链软删，二次删除 404。"""
+    ctx = _mission_api_env
+    r = await client.post(f"/api/v1/workspaces/{ctx['ws_id']}/missions",
+                          json={"requirement_text": "删除测试"})
+    mid = r.json()["data"]["id"]
+    await _decompose(mid, n_nodes=1)
+    await client.post(f"/api/v1/missions/{mid}/confirm")
+
+    # 造一个产物，验证一并软删
+    async with TestSessionLocal() as db:
+        node = (await db.execute(select(MissionNode).where(
+            MissionNode.mission_id == mid).limit(1))).scalar_one()
+        db.add(MissionArtifact(
+            mission_id=mid, node_id=node.id, org_id=ctx["org_id"],
+            name="report.md", kind="report", storage_key=f"missions/x/{mid}/a/report.md",
+        ))
+        await db.commit()
+
+    r = await client.delete(f"/api/v1/missions/{mid}")
+    assert r.status_code == 200, r.text
+
+    async with TestSessionLocal() as db:
+        m = await db.get(Mission, mid)
+        assert m.deleted_at is not None
+        assert m.status == "cancelled"
+        nodes = (await db.execute(select(MissionNode).where(
+            MissionNode.mission_id == mid))).scalars().all()
+        assert nodes and all(n.deleted_at is not None for n in nodes)
+        assert all(n.status == "skipped" for n in nodes)
+        events = (await db.execute(select(MissionEvent).where(
+            MissionEvent.mission_id == mid))).scalars().all()
+        assert events and all(e.deleted_at is not None for e in events)
+        arts = (await db.execute(select(MissionArtifact).where(
+            MissionArtifact.mission_id == mid))).scalars().all()
+        assert arts and all(a.deleted_at is not None for a in arts)
+        # 调度器口径（executing + 未删除）不再命中
+        from app.models.base import not_deleted
+        picked = (await db.execute(select(Mission).where(
+            Mission.status == "executing", not_deleted(Mission)))).scalars().all()
+        assert all(x.id != mid for x in picked)
+
+    # 列表不可见 + 详情 404 + 二次删除 404
+    r = await client.get(f"/api/v1/workspaces/{ctx['ws_id']}/missions")
+    assert all(m["id"] != mid for m in r.json()["data"])
+    assert (await client.get(f"/api/v1/missions/{mid}")).status_code == 404
+    assert (await client.delete(f"/api/v1/missions/{mid}")).status_code == 404
+
+
+async def test_delete_draft_mission(client, _mission_api_env):
+    """草稿态对话也可直接删除。"""
+    ctx = _mission_api_env
+    r = await client.post(f"/api/v1/workspaces/{ctx['ws_id']}/missions",
+                          json={"requirement_text": "草稿删除"})
+    mid = r.json()["data"]["id"]
+    await asyncio.sleep(0.3)  # 等创建端点拉起的后台真实拆解失败回落 draft
+    r = await client.delete(f"/api/v1/missions/{mid}")
+    assert r.status_code == 200, r.text
+    async with TestSessionLocal() as db:
+        assert (await db.get(Mission, mid)).deleted_at is not None
+
+
 async def test_answer_l2_unblocks(client, _mission_api_env):
     ctx = _mission_api_env
     r = await client.post(f"/api/v1/workspaces/{ctx['ws_id']}/missions",

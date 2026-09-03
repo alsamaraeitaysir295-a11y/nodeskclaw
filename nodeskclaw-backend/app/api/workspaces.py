@@ -1447,6 +1447,49 @@ async def workspace_chat(
     from app.services.runtime.messaging.bus import message_bus
     from app.services.runtime.messaging.ingestion.portal import build_portal_envelope
 
+    # Phase 2 聊天式任务流：无 @mention 时编排者意图检测——任务 → 创建 Mission
+    has_mentions = bool(data.mentions)
+    if not has_mentions:
+        async def _try_orchestrator():
+            try:
+                from app.services.mission.intent_service import classify_intent
+                from app.services.mission import mission_service
+                async with async_session_factory() as intent_db:
+                    intent = await classify_intent(
+                        intent_db, ws_info.org_id, data.message,
+                    )
+                    if intent != "task":
+                        return  # 普通对话 → 走正常路由
+                    # 任务 → 创建 Mission 并广播任务卡片
+                    from types import SimpleNamespace
+                    org_ns = SimpleNamespace(id=ws_info.org_id)
+                    user_ns = SimpleNamespace(id=user.id, name=user.name)
+                    mission = await mission_service.create_mission(
+                        intent_db, org=org_ns, user=user_ns,
+                        workspace_id=workspace_id,
+                        requirement_text=data.message,
+                    )
+                    mission_service.spawn_decomposition(mission.id)
+                    # 广播任务创建卡片到空间聊天流
+                    broadcast_event(workspace_id, "mission:card", {
+                        "mission_id": mission.id,
+                        "title": mission.title,
+                        "status": mission.status,
+                        "requester_name": user.name,
+                        "requirement": data.message[:200],
+                    })
+                    logger.info(
+                        "chat→mission: workspace=%s user=%s mission=%s",
+                        workspace_id, user.name, mission.id,
+                    )
+            except Exception:
+                logger.warning(
+                    "chat→mission 意图检测/创建失败，降级正常路由", exc_info=True,
+                )
+
+        _fire_task(_try_orchestrator())
+        # 意图检测在后台跑，不阻塞响应；如果是任务，卡片经 SSE 到达
+
     envelope = build_portal_envelope(
         workspace_id=workspace_id,
         user_id=user.id,

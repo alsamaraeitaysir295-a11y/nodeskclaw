@@ -211,11 +211,64 @@ async def _on_blocked(db, svc, mission, node, data: dict) -> None:
 
 
 async def _on_done(db, svc, mission, node, data: dict) -> None:
-    """节点完成：token 累加（节点+任务两级）→ done；全部 done → acceptance。"""
+    """节点完成：编排者验收复核 → 通过才 done（未通过打回重派/升级 L2）；全部 done → acceptance。"""
     usage = data.get("token_usage") if isinstance(data.get("token_usage"), dict) else {}
     prompt = int(usage.get("input") or 0)
     completion = int(usage.get("output") or 0)
+    summary = str(data.get("summary") or "").strip()
 
+    if node.status not in _DONE_STATES:
+        return  # 重复 done / 已终态：幂等跳过
+
+    # ── 编排者验收复核（主/子智能体协作）────────────────────────────
+    from app.services.mission import coordinator_review
+    passed, feedback = await coordinator_review.review_node_completion(db, mission, node, summary)
+    if not passed:
+        rejections = await coordinator_review.count_rejections(db, node.id)
+        if rejections < coordinator_review.MAX_REJECTIONS:
+            # 打回：节点回 pending，调度器自动重派（历次反馈注入新任务包）
+            await db.execute(
+                update(MissionNode)
+                .where(MissionNode.id == node.id, MissionNode.status.in_(_DONE_STATES))
+                .values(status="pending")
+            )
+            await svc.append(
+                mission.id, org_id=mission.org_id, node_id=node.id,
+                event_type="node_review_rejected", actor_type="system",
+                content=f"编排者打回：{feedback}",
+                visibility="timeline",
+            )
+            await db.commit()
+            return
+        # 打回用尽仍不通过 → L2 人工确认（答复含"通过"类关键词可强制完成）
+        await db.execute(
+            update(MissionNode)
+            .where(MissionNode.id == node.id, MissionNode.status.in_(_DONE_STATES))
+            .values(status="pending")
+        )
+        await db.execute(
+            update(Mission)
+            .where(Mission.id == mission.id, Mission.status == "executing")
+            .values(status="blocked_question")
+        )
+        await svc.append(
+            mission.id, org_id=mission.org_id, node_id=node.id,
+            event_type="l2_question", actor_type="system",
+            content=(
+                f"节点「{node.title}」连续 {coordinator_review.MAX_REJECTIONS + 1} 次编排者复核未通过，请人工确认："
+                f"回复「通过」强制完成该节点，或回复改进意见后再次派发。"
+                f"\n子智能体最后总结：{summary[:1500]}"
+                f"\n打回原因：{feedback}"
+            ),
+            payload={
+                "node_id": node.id,
+                "force_accept": coordinator_review.FORCE_ACCEPT_KEYWORDS,
+            },
+        )
+        await db.commit()
+        return
+
+    # ── 复核通过：原完成流程 ────────────────────────────────────────
     was_blocked = node.status == "blocked_question"
     res = await db.execute(
         update(MissionNode)
@@ -247,13 +300,22 @@ async def _on_done(db, svc, mission, node, data: dict) -> None:
             token_cost=Mission.token_cost + prompt + completion,
         )
     )
-    summary = str(data.get("summary") or "").strip()
     await svc.append(
         mission.id, org_id=mission.org_id, node_id=node.id,
         event_type="node_done", actor_type="agent",
         content=summary or f"节点「{node.title}」完成",
         payload={"summary": summary, "tokens": {"prompt": prompt, "completion": completion}},
     )
+
+    # Phase 2：推到协作空间聊天流
+    from app.services.mission.mission_service import broadcast_mission_event
+    broadcast_mission_event(mission.workspace_id, "mission:node_done", {
+        "mission_id": mission.id,
+        "mission_title": mission.title,
+        "node_title": node.title,
+        "node_seq": node.seq,
+        "summary": summary[:500],
+    })
 
     remaining = (await db.execute(
         select(MissionNode.id).where(
@@ -274,3 +336,16 @@ async def _on_done(db, svc, mission, node, data: dict) -> None:
                 event_type="system_note", actor_type="system",
                 content="全部节点完成，任务进入验收",
             )
+    elif getattr(mission, "execution_mode", "auto") == "step_review":
+        # step_review：本节点完成后暂停，等人工审核再继续派发下游
+        await db.execute(
+            update(Mission)
+            .where(Mission.id == mission.id, Mission.status == "executing")
+            .values(paused_for_review=True)
+        )
+        await svc.append(
+            mission.id, org_id=mission.org_id, node_id=node.id,
+            event_type="system_note", actor_type="system",
+            content=f"节点「{node.title}」完成，等待审核后继续（逐节点审核模式）",
+            payload={"review_pending": True, "node_title": node.title},
+        )

@@ -35,6 +35,12 @@ async def setup_db():
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # 平台能力词表种子：本 fixture 的 drop_all 可能清掉迁移种的词表
+            # （重建为空表），拆解/对话修改类测试依赖词表非空。注意不能 import
+            # 迁移模块取种子——venv 安装的 alembic 库遮蔽本地 alembic/ 目录。
+            from app.services.mission.capability_seed import seed_platform_tags
+
+            await conn.run_sync(seed_platform_tags)
     except Exception:
         # CI / local 环境未提供测试库时，跳过数据库初始化，允许无 DB 的基础测试继续执行
         yield
