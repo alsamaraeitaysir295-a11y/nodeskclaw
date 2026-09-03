@@ -15,7 +15,7 @@ function readStoredTheme(): Theme {
 }
 
 export const useThemeStore = defineStore('theme', () => {
-  // 默认深色（当前应用外观），用户切换后持久化到 localStorage
+  // 默认浅色，用户切换后持久化到 localStorage
   const theme = ref<Theme>(readStoredTheme())
 
   function setTheme(t: Theme) {
