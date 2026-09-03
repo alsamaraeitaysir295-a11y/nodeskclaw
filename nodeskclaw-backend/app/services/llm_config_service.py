@@ -1195,6 +1195,18 @@ def _make_account_entry(instance: Instance, workspace_id: str) -> dict:
     }
 
 
+def _ensure_context_management(config: dict) -> None:
+    """P1.6 上下文防爆（2026-09-03 修正）。
+
+    原实现注入 agents.defaults.contextManagement{autoCompact, compactionStyle}——
+    键名是从打包产物猜的，引擎启动时 zod 严格校验直接拒绝（"agents.defaults:
+    Invalid input"），导致员工容器重启即崩溃循环（运行时重载不校验所以当时"验证生效"
+    是假象）。在从镜像 dist 确认真实配置键之前不再注入任何内容；已写入存量实例的
+    坏键由修复脚本剥离。
+    """
+    return
+
+
 def _inject_channel_config(
     config: dict,
     instance: Instance,
@@ -1210,6 +1222,8 @@ def _inject_channel_config(
     if "channels" not in config:
         config["channels"] = {}
     ch = config["channels"].setdefault("nodeskclaw", {})
+    # P1.6 上下文防爆：确保 agents.defaults 启用自动压缩
+    _ensure_context_management(config)  # 现为 no-op（键名待确认），见函数注释
     if settings.TUNNEL_BASE_URL:
         tunnel_url = settings.TUNNEL_BASE_URL
         if instance.compute_provider == "docker":
@@ -2065,6 +2079,27 @@ async def repair_channel_account_urls(db: AsyncSession) -> dict:
     return {"repaired": repaired, "skipped": skipped, "failed": failed}
 
 
+async def _ensure_channel_account_config(fs, inst: Instance) -> bool:
+    """检查 openclaw.json 的 channels.nodeskclaw 是否有账户，没有则重新注入。
+
+    返回是否做了注入（True = 修复了缺失的通道配置）。
+    背景（2026-09-03 根治）：OpenClaw 网关在某些启动场景会重写 openclaw.json
+    导致 channels 段被清空——插件文件在但无连接凭证（instanceId/token），
+    隧道起不来。后端启动时自动检测并修复。
+    """
+    config = await _read_config_file(fs)
+    if config is None:
+        return False
+    ch = (config.get("channels") or {}).get("nodeskclaw") or {}
+    accounts = ch.get("accounts") or {}
+    if accounts.get("default") and ch.get("tunnelUrl"):
+        return False  # 配置完好，不需要修复
+    _inject_channel_config(config, inst, workspace_id="default")
+    await _write_config_file(fs, config)
+    logger.info("通道配置已重新注入: instance=%s (%s)", inst.id, inst.name)
+    return True
+
+
 async def startup_plugin_sync(db: AsyncSession) -> dict:
     """Scan all active OpenClaw instances and update stale plugin files.
 
@@ -2072,6 +2107,7 @@ async def startup_plugin_sync(db: AsyncSession) -> dict:
     Only updates files — does NOT restart instances.
     注意（双模式需求 2026-09-01）：不再按 WorkspaceAgent 过滤——不进空间的
     独立员工同样需要通道插件（否则隧道永远连不上、无法直聊）。
+    2026-09-03 根治：同时检查并修复被网关重置的通道账户配置。
     """
     inst_result = await db.execute(
         select(Instance).where(
@@ -2088,13 +2124,17 @@ async def startup_plugin_sync(db: AsyncSession) -> dict:
 
     updated_count = 0
     skipped_count = 0
+    config_repaired = 0
     failed_list: list[dict] = []
 
     for inst in instances:
         try:
             async with remote_fs(inst, db) as fs:
                 updated = await _sync_stale_plugins(fs, inst)
-                if updated:
+                repaired = await _ensure_channel_account_config(fs, inst)
+                if repaired:
+                    config_repaired += 1
+                if updated or repaired:
                     updated_count += 1
                 else:
                     skipped_count += 1
@@ -2105,11 +2145,12 @@ async def startup_plugin_sync(db: AsyncSession) -> dict:
             )
 
     logger.info(
-        "startup_plugin_sync: updated=%d skipped=%d failed=%d",
-        updated_count, skipped_count, len(failed_list),
+        "startup_plugin_sync: updated=%d (config_repaired=%d) skipped=%d failed=%d",
+        updated_count, config_repaired, skipped_count, len(failed_list),
     )
     return {
         "updated": updated_count,
+        "config_repaired": config_repaired,
         "skipped": skipped_count,
         "failed": len(failed_list),
     }
