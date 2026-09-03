@@ -874,6 +874,45 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   const _typingTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+  interface MissionChatData {
+    title: string
+    status: string
+    nodes: Array<{ seq: number; title: string; tags: string[] }>
+    events: Array<{ node_title: string; summary: string; ts: number }>
+  }
+
+  const missionMessagesRef = ref(new Map<string, MissionChatData>())
+
+  function _handleMissionEvent(eventType: string, data: Record<string, unknown>) {
+    const missionMessages = missionMessagesRef.value
+    if (!missionMessages) return
+    const mid = String(data.mission_id || '')
+    const existing: MissionChatData = missionMessages.get(mid) || { events: [], nodes: [], status: 'draft', title: '' }
+
+    if (eventType === 'mission:card') {
+      existing.title = String(data.title || data.requirement || '任务')
+      existing.status = String(data.status || 'draft')
+      missionMessages.set(mid, existing)
+    } else if (eventType === 'mission:decomposed') {
+      existing.title = String(data.title || existing.title)
+      existing.status = String(data.status || 'awaiting_confirm')
+      existing.nodes = (data.nodes as Array<{ seq: number; title: string; tags: string[] }>) || []
+      missionMessages.set(mid, existing)
+    } else if (eventType === 'mission:node_done') {
+      existing.events.push({
+        node_title: String(data.node_title || ''),
+        summary: String(data.summary || ''),
+        ts: Date.now(),
+      })
+      missionMessages.set(mid, existing)
+    } else if (eventType === 'mission:deleted') {
+      // 对话被删除：任务卡片与聊天数据一并移除
+      missionMessages.delete(mid)
+    }
+
+    missionMessagesRef.value = new Map(missionMessages)
+  }
+
   function _handleAgentTyping(data: Record<string, unknown>) {
     const instanceId = data.instance_id as string
     const agentName = data.agent_name as string
@@ -1119,6 +1158,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
           const data = JSON.parse(e.data)
           handler(data)
           externalCallback?.(eventName, data)
+        } catch { /* ignore */ }
+      })
+    }
+
+    // Phase 2 聊天式任务流：任务事件渲染到聊天消息列表
+    const missionEvents = [
+      'mission:card', 'mission:decomposed', 'mission:node_done', 'mission:artifact', 'mission:deleted',
+    ]
+    for (const evtName of missionEvents) {
+      eventSource.addEventListener(evtName, (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data)
+          // 渲染为系统消息（聊天流可识别的 mission 类型）
+          _handleMissionEvent(evtName, data)
+          externalCallback?.(evtName, data)
         } catch { /* ignore */ }
       })
     }
@@ -1631,6 +1685,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     members,
     loading,
     chatMessages,
+    missionMessages: missionMessagesRef,
     chatLoading,
     typingAgents,
     unreadCount,
