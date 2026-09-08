@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.api.open_registry import router as open_registry_router
 from app.api.router import admin_router, api_router, webhook_router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
@@ -375,6 +376,7 @@ async def lifespan(app: FastAPI):
                     "content_writer.json",
                     "content_reviewer.json",
                     "content_distributor.json",
+                    "market_client.json",
                 ]
                 _genome_files = [
                     "genome_self_management.json",
@@ -921,7 +923,10 @@ class _NoCacheAPIMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
+        # no-store 覆盖 /api/ 与匿名开放的 /registry/（同样不可被中间层缓存）
+        if scope["type"] != "http" or not (
+            scope["path"].startswith("/api/") or scope["path"].startswith("/registry/")
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -948,6 +953,7 @@ register_exception_handlers(app)
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1/admin")
 app.include_router(webhook_router)
+app.include_router(open_registry_router, prefix="/registry")
 
 # ── EE 模块自动加载 ─────────────────────────────────
 from app.core.feature_gate import feature_gate  # noqa: E402
