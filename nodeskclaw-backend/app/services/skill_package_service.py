@@ -56,7 +56,9 @@ manifest JSON 结构（存储在 genes.manifest 列）：
 """
 import base64
 import io
+import json
 import logging
+import posixpath
 import zipfile
 from pathlib import Path
 
@@ -216,6 +218,55 @@ def decode_binary_entry(value: dict) -> bytes:
         return base64.b64decode(value["b64"], validate=True)
     except Exception as exc:
         raise ValueError(f"二进制条目 base64 解码失败: {exc}") from exc
+
+
+def _manifest_bytes(value) -> bytes:
+    """将 manifest 字段值安全转换为 bytes，容忍 None 和非字符串类型。
+
+    二进制 base64 条目（.docx 等）还原为原始字节。
+    """
+    if isinstance(value, bytes):
+        return value
+    if value is None:
+        return b""
+    if is_binary_entry(value):
+        try:
+            return decode_binary_entry(value)
+        except ValueError:
+            return b""
+    return str(value).encode("utf-8")
+
+
+def build_gene_zip(gene) -> tuple[io.BytesIO, int]:
+    """将 Gene 的 manifest 打包为内存 ZIP，目录结构与 upload-folder 接口对称。
+
+    供门户 /genes/{slug}/download 与开放 /registry download 两处复用。
+    返回 (buf, zip_size)，buf 读取位置已 reset 到 0；manifest 损坏抛 json.JSONDecodeError。
+    """
+    manifest = json.loads(gene.manifest or "{}")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # SKILL.md：来自 manifest.skill.content
+        skill_content: str = manifest.get("skill", {}).get("content", "")
+        zf.writestr(f"{gene.slug}/SKILL.md", _manifest_bytes(skill_content))
+
+        # scripts：键为纯文件名（如 main.py），放在 {slug}/ 根目录
+        for fname, content in manifest.get("scripts", {}).items():
+            safe_name = posixpath.basename(fname)
+            if safe_name and safe_name != ".":
+                zf.writestr(f"{gene.slug}/{safe_name}", _manifest_bytes(content))
+
+        # assets / references：键为带子目录的相对路径，拒绝 .. 逃逸
+        for section in ("assets", "references"):
+            for rel_path, content in manifest.get(section, {}).items():
+                safe_path = posixpath.normpath(rel_path).lstrip("/")
+                if ".." not in safe_path.split("/"):
+                    zf.writestr(f"{gene.slug}/{safe_path}", _manifest_bytes(content))
+
+    buf.seek(0, 2)
+    zip_size = buf.tell()
+    buf.seek(0)
+    return buf, zip_size
 
 
 def _safe_decode(content: bytes, path: str) -> str | dict:

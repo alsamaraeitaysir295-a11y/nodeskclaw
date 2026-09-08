@@ -4,7 +4,6 @@ import hashlib
 import io
 import json
 import logging
-import posixpath
 import re
 import zipfile
 
@@ -41,7 +40,7 @@ from app.schemas.gene import (
     UpdateGenomeRequest,
     UploadTarget,
 )
-from app.services import gene_category_service, gene_market_stat_service, gene_service
+from app.services import gene_category_service, gene_market_stat_service, gene_service, skill_package_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -264,8 +263,6 @@ async def upload_gene_folder(
 
     前端使用 <input webkitdirectory> 选择文件夹后上传。
     """
-    from app.services import skill_package_service
-
     # 直接上传入口只接受 target=personal：为保证组织内技能的血缘关系，
     # 组织库/公共市场的内容必须先落地个人库，再通过 fork 覆盖同步过去，
     # 管理员/超管也没有例外（产品决策，见 2026-07-13 计划）
@@ -392,25 +389,6 @@ async def get_gene(
     return ApiResponse(data=gene)
 
 
-def _to_bytes(value) -> bytes:
-    """将 manifest 字段值安全转换为 bytes，容忍 None 和非字符串类型。
-
-    二进制 base64 条目（.docx 等）还原为原始字节。
-    """
-    from app.services import skill_package_service
-
-    if isinstance(value, bytes):
-        return value
-    if value is None:
-        return b""
-    if skill_package_service.is_binary_entry(value):
-        try:
-            return skill_package_service.decode_binary_entry(value)
-        except ValueError:
-            return b""
-    return str(value).encode("utf-8")
-
-
 @router.get("/genes/{gene_slug}/download")
 async def download_gene(
     gene_slug: str,
@@ -429,42 +407,13 @@ async def download_gene(
     if not gene:
         raise NotFoundError("技能不存在", "errors.gene.not_found")
 
-    # 解析 manifest JSON（字段为 Text 列，存储为 JSON 字符串）
+    # 在内存中构建 ZIP（解析 manifest + 打包逻辑复用 skill_package_service.build_gene_zip）
     try:
-        manifest: dict = json.loads(gene.manifest or "{}")
+        buf, zip_size = skill_package_service.build_gene_zip(gene)
     except json.JSONDecodeError:
         from app.core.exceptions import BadRequestError
         raise BadRequestError("技能数据格式损坏，无法下载", "errors.gene.manifest_corrupt")
 
-    # 在内存中构建 ZIP，避免临时文件 I/O
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # SKILL.md：来自 manifest.skill.content
-        skill_content: str = manifest.get("skill", {}).get("content", "")
-        zf.writestr(f"{gene_slug}/SKILL.md", _to_bytes(skill_content))
-
-        # scripts：键为纯文件名（如 main.py），放在 {slug}/ 根目录
-        for fname, content in manifest.get("scripts", {}).items():
-            safe_name = posixpath.basename(fname)
-            if safe_name and safe_name != ".":
-                zf.writestr(f"{gene_slug}/{safe_name}", _to_bytes(content))
-
-        # assets：键为带子目录的相对路径（如 assets/data.json）
-        for rel_path, content in manifest.get("assets", {}).items():
-            safe_path = posixpath.normpath(rel_path).lstrip("/")
-            if ".." not in safe_path.split("/"):
-                zf.writestr(f"{gene_slug}/{safe_path}", _to_bytes(content))
-
-        # references：键为带子目录的相对路径（如 reference/guide.md）
-        for rel_path, content in manifest.get("references", {}).items():
-            safe_path = posixpath.normpath(rel_path).lstrip("/")
-            if ".." not in safe_path.split("/"):
-                zf.writestr(f"{gene_slug}/{safe_path}", _to_bytes(content))
-
-    # 计算 ZIP 大小并重置读取位置，用于填写 Content-Length 响应头
-    buf.seek(0, 2)
-    zip_size = buf.tell()
-    buf.seek(0)
     # 统计埋点：zip 下载计一次下载量（失败不影响下载主流程）
     await gene_market_stat_service.record_event(
         gene=gene, event_type="zip_download", db=db,
