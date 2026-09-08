@@ -243,6 +243,25 @@ Admin 后台权限**严格依赖 `AdminMembership`**，`is_super_admin` 不再�
 
 启动后访问 `http://localhost:4510/docs` 查看完整 API 文档（Swagger UI）。
 
+## 开放 Registry API
+
+平台可作为**开放数据提供方**对外提供公共技能市场，供外部智能体平台
+（WorkBuddy 等）与其他 DeskClaw 实例消费。匿名只读，无需账号。
+
+- 基址：`https://<host>/registry`，自描述文档：`GET /registry/llms.txt`
+- 端点（GeneHub 协议形状）：
+  - `GET /registry/api/v1/genes` 搜索（`q`/`tags`/`category`/`sort`/`page`/`page_size≤100`）
+  - `GET /registry/api/v1/genes/{slug}` 详情
+  - `GET /registry/api/v1/genes/{slug}/manifest` 技能本体（Agent Skills 格式，全量内联）
+  - `GET /registry/api/v1/genes/{slug}/download` ZIP 下载
+  - `GET /registry/api/v1/genes/tags` / `GET /registry/api/v1/genes/featured`
+- 其他 DeskClaw 平台接入：`GENEHUB_REGISTRY_URL=https://<host>/registry`
+- 数据范围：仅公共已审技能（组织/个人库不暴露）
+- 限流（IP）：读 60 次/分钟、下载 30 次/分钟（`OPEN_REGISTRY_READ_RATE_LIMIT` /
+  `OPEN_REGISTRY_DOWNLOAD_RATE_LIMIT` 可调）；`OPEN_REGISTRY_ENABLED=false` 可整体关闭
+- 部署注记：限流按 `X-Forwarded-For` 首段取 IP；若入口代理为追加式 XFF，需自行剥离/配置可信代理，
+  否则限流可被伪造头绕过（总键数上限 `_MAX_TRACKED_KEYS` 兜底内存，见 `app/core/open_registry_rate_limit.py`）
+
 ## 错误响应契约（i18n 对齐）
 
 失败响应统一结构：
