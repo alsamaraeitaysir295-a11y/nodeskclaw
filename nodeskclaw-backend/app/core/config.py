@@ -150,6 +150,11 @@ class Settings(BaseSettings):
     # ── Gene Seed ───────────────────────────────────────
     SEED_GENES: bool = True
 
+    # ── 开放 Registry（/registry 匿名只读技能市场）──
+    OPEN_REGISTRY_ENABLED: bool = True
+    OPEN_REGISTRY_READ_RATE_LIMIT: int = 60      # 读类接口 次/分钟/IP
+    OPEN_REGISTRY_DOWNLOAD_RATE_LIMIT: int = 30  # 下载接口 次/分钟/IP
+
     # ── Skill Registries ─────────────────────────────────
     # JSON array of registry configs:
     # [{"type":"genehub","id":"deskhub","url":"https://skills.deskclaw.me","api_key":"","name":"DeskHub"},
