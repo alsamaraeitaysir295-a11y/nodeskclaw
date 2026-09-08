@@ -84,6 +84,8 @@ Docker Compose：`docker compose up -d`（CE）/ 加 `-f docker-compose.ee.yml`�
 - **审核入口需对操作者自身权限做 bypass**：admin/超管自上传不该走 `pending_owner`，用 `is_user_admin_of_org()` 判定后传 `bypass_review`（涉及 `/genes/upload-folder`、`/genes/manual`、`fork_gene_to_library` 三处）
 - **审核/审计列表禁裸显 UUID**：`created_by`/`user_id` 等字段服务层批量 join `User` 表填姓名/邮箱（不要 N+1），前端三级回退 `name → email → UUID 截短`
 - **文件分发白名单需与源目录同步**：如 `llm_config_service.py` 的 `PLUGIN_FILES`，新增/删除分发类源文件后必须同步白名单，否则文件不生效且报错现象与根因无关联
+- **插件工具清单必须同步 contracts.tools 契约**：`openclaw-channel-nodeskclaw` 的 `NODESKCLAW_TOOL_NAMES` 增删工具后，必须同步 `openclaw.plugin.json` 的 `contracts.tools`——openclaw runtime（v2026.6.11+）发现任一未声明工具会**整批拒绝注册**该插件全部工具（现象：AI 员工所有 nodeskclaw_* 工具静默消失，agent 只剩内置 read/web 工具；实例日志 grep `must declare contracts.tools` 确认）。插件改动经 backend 镜像烧录 `/app/openclaw-channel-nodeskclaw` 分发，改源码后须重建 backend 镜像并重启实例容器才生效
+- **新 ORM 关系禁用 `lazy="noload"`**：除非加载点全部显式 `selectinload`，否则关系属性恒为 None 且无报错（如 `InstanceKnowledgeBase.kb` 曾致绑定接口 500）；API 响应需要嵌套对象的关系一律 `lazy="selectin"` 或查询处显式预加载，并为嵌套响应写走 HTTP 层（response_model）的测试——直调 handler 函数不触发序列化校验
 
 ## Git 规范
 
