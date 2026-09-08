@@ -39,4 +39,7 @@ class InstanceKnowledgeBase(BaseModel):
         String(36), ForeignKey("users.id"), nullable=False
     )
 
-    kb: Mapped[KnowledgeBase] = relationship("KnowledgeBase", lazy="noload")
+    # selectin：绑定量级小（单实例数个 KB），自动带出 KB 详情；
+    # 此前用 noload 导致 attach 后 refresh 也拿不到 kb（恒 None），
+    # POST /instances/{id}/knowledge-bases 响应序列化 500（2026-09-08 修复）
+    kb: Mapped[KnowledgeBase] = relationship("KnowledgeBase", lazy="selectin")
