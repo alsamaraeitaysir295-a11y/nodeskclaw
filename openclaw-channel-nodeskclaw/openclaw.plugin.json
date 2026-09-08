@@ -17,7 +17,11 @@
       "nodeskclaw_chat_history",
       "nodeskclaw_shared_files",
       "nodeskclaw_knowledge_search",
-      "nodeskclaw_write_file"
+      "nodeskclaw_write_file",
+      "mission_report",
+      "mission_submit_artifact",
+      "mission_block",
+      "mission_complete"
     ]
   }
 }
